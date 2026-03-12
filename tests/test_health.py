@@ -6,7 +6,6 @@ import pytest
 from httpx import AsyncClient
 from pydantic import ValidationError
 
-
 # ── Health endpoint ───────────────────────────────────────────────────────────
 
 
@@ -25,9 +24,7 @@ def test_db_connection_valid_url_does_not_raise() -> None:
     from app.core.database import build_engine
 
     # We only check engine creation (not a live connection) to keep tests fast.
-    engine = build_engine(
-        "postgresql+asyncpg://tga:password@localhost/tganalytics_test"
-    )
+    engine = build_engine("postgresql+asyncpg://tga:password@localhost/tganalytics_test")
     assert engine is not None
 
 
