@@ -8,9 +8,10 @@ import asyncio
 import os
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import create_async_engine
+
+from alembic import context
 
 # Alembic Config object — gives access to values in alembic.ini.
 config = context.config
@@ -21,7 +22,7 @@ if config.config_file_name is not None:
 
 # Import the declarative Base so Alembic can detect model changes.
 from app.core.database import Base  # noqa: E402
-from app.models import *  # noqa: F401, F403 — ensure all models are registered
+from app.models import *  # noqa: E402, F401, F403 — ensure all models are registered
 
 target_metadata = Base.metadata
 
