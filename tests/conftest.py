@@ -127,3 +127,51 @@ async def db_session(async_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, 
         async with AsyncSession(bind=conn, expire_on_commit=False) as session:
             yield session
         await conn.rollback()
+
+
+@pytest.fixture()
+async def api_client(async_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
+    """Full-stack HTTP client connected to the real test DB.
+
+    ASGITransport does not trigger ASGI lifespan, so we call init_db()
+    and close_db() manually.  DB connectivity is already verified by the
+    ``async_engine`` fixture — if that skips, this fixture is never reached.
+
+    All requests include ``X-Internal-Key`` pre-set to the test secret.
+    """
+    import importlib
+
+    from app.core.database import close_db, init_db
+
+    overrides = {
+        "DATABASE_URL": os.environ["DATABASE_URL"],
+        "TELEGRAM_BOT_TOKEN": "1234567890:test-token-for-testing-only",
+        "ADMIN_CHAT_ID": "123456789",
+        "SECRET_KEY": "test-secret-key-not-for-production",
+        "WEBHOOK_BASE_URL": "https://example.com",
+    }
+    prev = {k: os.environ.get(k) for k in overrides}
+    os.environ.update(overrides)
+
+    import app.main as main_mod
+
+    importlib.reload(main_mod)
+    test_app = main_mod.create_app()
+
+    # ASGITransport doesn't run lifespan, so initialise the DB manually.
+    init_db(os.environ["DATABASE_URL"])
+
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=test_app),
+            base_url="http://testserver",
+            headers={"X-Internal-Key": "test-secret-key-not-for-production"},
+        ) as c:
+            yield c
+    finally:
+        await close_db()
+        for k, v in prev.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v

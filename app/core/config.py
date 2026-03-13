@@ -13,7 +13,11 @@ class Settings(BaseSettings):
     the server starts accepting traffic.
     """
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",  # ignore postgres_*, etc. from docker-compose .env
+    )
 
     # ── Telegram ──────────────────────────────────────────────────────────
     telegram_bot_token: str
