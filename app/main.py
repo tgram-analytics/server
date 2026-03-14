@@ -8,6 +8,8 @@ from fastapi import FastAPI
 from app.api.health import router as health_router
 from app.api.ingestion import router as ingestion_router
 from app.api.projects import router as projects_router
+from app.api.webhook import router as webhook_router
+from app.bot.setup import init_bot, shutdown_bot
 from app.core.config import get_settings
 from app.core.database import close_db, init_db
 
@@ -17,7 +19,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: initialise resources on startup, clean up on shutdown."""
     settings = get_settings()
     init_db(settings.database_url)
+    await init_bot(
+        token=settings.telegram_bot_token,
+        admin_chat_id=settings.admin_chat_id,
+        webhook_base_url=settings.webhook_base_url,
+    )
     yield
+    await shutdown_bot()
     await close_db()
 
 
@@ -36,6 +44,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(projects_router)
     app.include_router(ingestion_router)
+    app.include_router(webhook_router)
 
     return app
 

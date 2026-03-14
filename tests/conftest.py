@@ -130,6 +130,19 @@ async def db_session(async_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, 
 
 
 @pytest.fixture()
+def session_factory(async_engine: AsyncEngine):
+    """An async_sessionmaker bound to the test engine.
+
+    Use this fixture in bot handler tests that need to patch
+    ``get_session_factory()`` — it lets handlers commit data through the
+    real test DB without requiring ``init_db()`` to be called.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    return async_sessionmaker(async_engine, expire_on_commit=False, class_=AsyncSession)
+
+
+@pytest.fixture()
 async def api_client(async_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
     """Full-stack HTTP client connected to the real test DB.
 

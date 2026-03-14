@@ -9,7 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml .
+COPY pyproject.toml README.md .
+COPY app ./app
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir ".[dev]"
 
