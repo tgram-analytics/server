@@ -55,6 +55,7 @@ def test_env_validation_missing_telegram_bot_token() -> None:
                 admin_chat_id=123,
                 database_url="postgresql+asyncpg://x:x@localhost/x",
                 secret_key="s",
+                _env_file=None,  # prevent reading the real .env from disk
             )
     finally:
         if saved is not None:
@@ -78,6 +79,7 @@ def test_env_validation_missing_admin_chat_id() -> None:
                 telegram_bot_token="1234:token",
                 database_url="postgresql+asyncpg://x:x@localhost/x",
                 secret_key="s",
+                _env_file=None,  # prevent reading the real .env from disk
             )
     finally:
         if saved is not None:
