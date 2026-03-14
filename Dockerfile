@@ -38,5 +38,6 @@ USER appuser
 
 EXPOSE 8000
 
-# Apply pending Alembic migrations, then start the server
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# Apply pending Alembic migrations with retries, then start the server.
+# This avoids crash loops when DNS/network for the DB is not ready yet.
+CMD ["sh", "-c", "attempt=1; max_attempts=30; until alembic upgrade head; do if [ \"$attempt\" -ge \"$max_attempts\" ]; then echo 'Database migration failed after retries.'; exit 1; fi; echo \"Migration attempt $attempt/$max_attempts failed, retrying in 2s...\"; attempt=$((attempt+1)); sleep 2; done; exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
