@@ -46,22 +46,69 @@ async def _run_alert_evaluation(project_id: uuid.UUID, event_name: str) -> None:
     """Background task: evaluate alerts after event insertion.
 
     Creates its own session so it can run after the HTTP response is sent.
-    Fired alerts are logged; actual Telegram notifications come in Phase 8.
+    Sends Telegram notifications for fired alerts.
     """
     import logging
+
+    from sqlalchemy import select
+
+    from app.bot.setup import get_bot
+    from app.models.alert import AlertCondition
+    from app.models.project import Project
 
     log = logging.getLogger(__name__)
     try:
         factory = get_session_factory()
         async with factory() as session, session.begin():
             fired = await evaluate_alerts(session, project_id=project_id, event_name=event_name)
-            if fired:
-                log.info(
-                    "alerts fired: project=%s event=%s count=%d",
-                    project_id,
-                    event_name,
-                    len(fired),
-                )
+            if not fired:
+                return
+
+            log.info(
+                "alerts fired: project=%s event=%s count=%d",
+                project_id,
+                event_name,
+                len(fired),
+            )
+
+            result = await session.execute(
+                select(Project).where(Project.id == project_id)
+            )
+            project = result.scalar_one_or_none()
+            if project is None:
+                log.warning("project not found for alert notification: %s", project_id)
+                return
+
+            bot = get_bot()
+            for alert in fired:
+                if alert.condition == AlertCondition.every:
+                    msg = (
+                        f"🔔 Event <b>{event_name}</b> received "
+                        f"on <b>{project.name}</b>"
+                    )
+                elif alert.condition == AlertCondition.every_n:
+                    msg = (
+                        f"🔔 Event <b>{event_name}</b> received "
+                        f"<b>{alert.threshold_n}</b> times on <b>{project.name}</b>"
+                    )
+                else:  # threshold
+                    msg = (
+                        f"🔔 Event <b>{event_name}</b> exceeded "
+                        f"<b>{alert.threshold_n}</b> today on <b>{project.name}</b>"
+                    )
+
+                try:
+                    await bot.send_message(
+                        chat_id=project.admin_chat_id,
+                        text=msg,
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    log.exception(
+                        "failed to send alert notification: alert=%s project=%s",
+                        alert.id,
+                        project_id,
+                    )
     except Exception:
         log.exception("alert evaluation failed for project=%s event=%s", project_id, event_name)
 

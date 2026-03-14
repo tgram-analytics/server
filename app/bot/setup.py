@@ -15,6 +15,7 @@ from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
+    MessageHandler,
     filters,
 )
 
@@ -30,6 +31,7 @@ def build_application(token: str, admin_chat_id: int) -> Application:
     Telegram's long-polling.  Handlers are restricted to messages/callbacks
     from the configured admin chat ID only.
     """
+    from app.bot.handlers.alerts import alert_callback, handle_text_message
     from app.bot.handlers.projects import add_command, project_callback, projects_command
     from app.bot.handlers.system import cancel_command, help_command, start_command
 
@@ -45,7 +47,12 @@ def build_application(token: str, admin_chat_id: int) -> Application:
 
     # Callback queries don't support CommandHandler filters directly — we
     # guard inside the handler using the same admin_chat_id check.
+    # Alert callbacks handled first (pattern-matched), then project callbacks.
+    app.add_handler(CallbackQueryHandler(alert_callback, pattern=r"^(alert_|back:alerts:)"))
     app.add_handler(CallbackQueryHandler(project_callback))
+
+    # Text messages for multi-step conversation flows (e.g., add-alert)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, handle_text_message))
 
     return app
 

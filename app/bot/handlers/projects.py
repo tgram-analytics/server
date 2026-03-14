@@ -7,6 +7,7 @@ import uuid
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from app.bot.handlers.alerts import show_alerts_menu
 from app.core.config import get_settings
 from app.core.database import get_session_factory
 from app.services.projects import create_project, delete_project, get_project, list_projects
@@ -107,8 +108,11 @@ async def project_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
     elif data.startswith("del_no:"):
         await _show_project_menu(query, data[7:], admin_chat_id)
 
+    elif data.startswith("menu:alerts:"):
+        project_id_str = data[12:]
+        await show_alerts_menu(query, project_id_str, admin_chat_id)
+
     elif data.startswith("menu:"):
-        # Future phases will fill these in
         parts = data.split(":", 2)
         feature = parts[1] if len(parts) > 1 else "unknown"
         await query.edit_message_text(
@@ -116,8 +120,30 @@ async def project_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
             parse_mode="HTML",
         )
 
+    elif data == "back:projects":
+        await _show_projects_list(query, admin_chat_id)
+
 
 # ── Private helpers ────────────────────────────────────────────────────────────
+
+
+async def _show_projects_list(query, admin_chat_id: int) -> None:
+    """Re-display the projects list via callback (for « Back button)."""
+    factory = get_session_factory()
+    async with factory() as session:
+        projects = await list_projects(session, admin_chat_id)
+
+    if not projects:
+        await query.edit_message_text(
+            "📭 No projects yet.\n\nUse /add <i>name</i> to create one.",
+            parse_mode="HTML",
+        )
+        return
+
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton(f"📊 {p.name}", callback_data=f"proj:{p.id}")] for p in projects]
+    )
+    await query.edit_message_text("Select a project:", reply_markup=keyboard)
 
 
 async def _show_project_menu(query, project_id_str: str, admin_chat_id: int) -> None:

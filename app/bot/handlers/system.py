@@ -11,7 +11,8 @@ _HELP_TEXT = (
     "/add <i>name</i> — create a new project and get its API key\n"
     "/projects — list all your projects\n"
     "/help — show this message\n"
-    "/cancel — cancel the current operation\n"
+    "/cancel — cancel the current operation\n\n"
+    "💡 <b>Tip:</b> Manage alerts via /projects → select a project → Alerts"
 )
 
 
