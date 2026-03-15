@@ -11,11 +11,9 @@ from telegram.ext import ContextTypes
 from app.bot.states import BotStateService
 from app.core.config import get_settings
 from app.core.database import get_session_factory
-from app.models.alert import AlertCondition
 from app.services.analytics import count_events, events_over_time, list_event_names
 from app.services.charts import ChartGenerationError, generate_line_chart
 from app.services.projects import get_project, list_projects
-
 
 # ── /events command ──────────────────────────────────────────────────────────
 
