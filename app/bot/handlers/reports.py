@@ -31,7 +31,9 @@ async def show_reports_menu(query, project_id_str: str, admin_chat_id: int) -> N
 
         # Total events in last 7 days
         total_result = await session.execute(
-            select(func.count()).select_from(Event).where(
+            select(func.count())
+            .select_from(Event)
+            .where(
                 Event.project_id == pid,
                 Event.timestamp >= seven_days_ago,
             )
@@ -40,7 +42,9 @@ async def show_reports_menu(query, project_id_str: str, admin_chat_id: int) -> N
 
         # Unique sessions in last 7 days
         sessions_result = await session.execute(
-            select(func.count(func.distinct(Event.session_id))).select_from(Event).where(
+            select(func.count(func.distinct(Event.session_id)))
+            .select_from(Event)
+            .where(
                 Event.project_id == pid,
                 Event.timestamp >= seven_days_ago,
             )
@@ -74,10 +78,12 @@ async def show_reports_menu(query, project_id_str: str, admin_chat_id: int) -> N
         lines.append("\n<i>No events in the last 7 days.</i>")
 
     text = "\n".join(lines)
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 View Chart", callback_data=f"rpt_chart:{project_id_str}")],
-        [InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")],
-    ])
+    keyboard = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📊 View Chart", callback_data=f"rpt_chart:{project_id_str}")],
+            [InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")],
+        ]
+    )
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 
@@ -126,9 +132,11 @@ async def send_chart_photo(query, project_id_str: str, admin_chat_id: int) -> No
                     granularity="day",
                 )
 
-    back_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("« Back", callback_data=f"menu:reports:{project_id_str}")],
-    ])
+    back_keyboard = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("« Back", callback_data=f"menu:reports:{project_id_str}")],
+        ]
+    )
 
     if not data:
         await query.edit_message_text(
@@ -155,9 +163,15 @@ async def send_chart_photo(query, project_id_str: str, admin_chat_id: int) -> No
     await query.edit_message_text(
         f"📊 <b>{chart_event}</b> — last 7 days  ↓",
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("« Back to report", callback_data=f"menu:reports:{project_id_str}")],
-        ]),
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "« Back to report", callback_data=f"menu:reports:{project_id_str}"
+                    )
+                ],
+            ]
+        ),
     )
     await query.message.reply_photo(
         photo=png_bytes,

@@ -1,6 +1,6 @@
 """Alert feature tests — CRUD service, bot handlers, conversation flow, notifications.
 
-Tests follow the same patterns as test_phase6.py: fake Update / Message / 
+Tests follow the same patterns as test_phase6.py: fake Update / Message /
 CallbackQuery objects with MagicMock/AsyncMock, handlers called directly.
 """
 
@@ -93,7 +93,9 @@ async def test_create_alert_with_threshold_condition(db_session, session_factory
     from app.services.projects import create_project
 
     async with session_factory() as session:
-        project, _ = await create_project(session, name="test-threshold.com", admin_chat_id=ADMIN_ID)
+        project, _ = await create_project(
+            session, name="test-threshold.com", admin_chat_id=ADMIN_ID
+        )
         await session.commit()
 
         alert = await create_alert(
@@ -118,8 +120,12 @@ async def test_list_alerts_returns_project_alerts(db_session, session_factory):
         project, _ = await create_project(session, name="list-test.com", admin_chat_id=ADMIN_ID)
         await session.commit()
 
-        await create_alert(session, project_id=project.id, event_name="event1", condition=AlertCondition.every)
-        await create_alert(session, project_id=project.id, event_name="event2", condition=AlertCondition.every)
+        await create_alert(
+            session, project_id=project.id, event_name="event1", condition=AlertCondition.every
+        )
+        await create_alert(
+            session, project_id=project.id, event_name="event2", condition=AlertCondition.every
+        )
         await session.commit()
 
         alerts = await list_alerts(session, project.id)
@@ -136,7 +142,9 @@ async def test_delete_alert(db_session, session_factory):
         project, _ = await create_project(session, name="delete-test.com", admin_chat_id=ADMIN_ID)
         await session.commit()
 
-        alert = await create_alert(session, project_id=project.id, event_name="to_delete", condition=AlertCondition.every)
+        alert = await create_alert(
+            session, project_id=project.id, event_name="to_delete", condition=AlertCondition.every
+        )
         await session.commit()
 
         deleted = await delete_alert(session, alert.id, project.id)
@@ -167,7 +175,9 @@ async def test_toggle_alert(db_session, session_factory):
         project, _ = await create_project(session, name="toggle-test.com", admin_chat_id=ADMIN_ID)
         await session.commit()
 
-        alert = await create_alert(session, project_id=project.id, event_name="toggle_me", condition=AlertCondition.every)
+        alert = await create_alert(
+            session, project_id=project.id, event_name="toggle_me", condition=AlertCondition.every
+        )
         await session.commit()
         assert alert.is_active is True
 
@@ -191,7 +201,9 @@ async def test_alerts_menu_shows_alerts_list(db_session, session_factory):
 
     async with session_factory() as session:
         project, _ = await create_project(session, name="alerts-menu.com", admin_chat_id=ADMIN_ID)
-        await create_alert(session, project_id=project.id, event_name="signup", condition=AlertCondition.every)
+        await create_alert(
+            session, project_id=project.id, event_name="signup", condition=AlertCondition.every
+        )
         await session.commit()
         pid = str(project.id)
 
@@ -222,8 +234,10 @@ async def test_alert_add_starts_conversation(db_session, session_factory):
 
     update, ctx = _make_callback(chat_id=ADMIN_ID, data=f"alert_add:{pid}")
 
-    with patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory), \
-         patch("app.bot.handlers.alerts.get_settings") as mock_settings:
+    with (
+        patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.alerts.get_settings") as mock_settings,
+    ):
         mock_settings.return_value.admin_chat_id = ADMIN_ID
         await alert_callback(update, ctx)
 
@@ -239,15 +253,19 @@ async def test_alert_delete_removes_alert(db_session, session_factory):
 
     async with session_factory() as session:
         project, _ = await create_project(session, name="del-alert.com", admin_chat_id=ADMIN_ID)
-        alert = await create_alert(session, project_id=project.id, event_name="to_del", condition=AlertCondition.every)
+        alert = await create_alert(
+            session, project_id=project.id, event_name="to_del", condition=AlertCondition.every
+        )
         await session.commit()
         pid = str(project.id)
         aid = str(alert.id)
 
     update, ctx = _make_callback(chat_id=ADMIN_ID, data=f"alert_d:{aid}")
 
-    with patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory), \
-         patch("app.bot.handlers.alerts.get_settings") as mock_settings:
+    with (
+        patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.alerts.get_settings") as mock_settings,
+    ):
         mock_settings.return_value.admin_chat_id = ADMIN_ID
         await alert_callback(update, ctx)
 
@@ -263,7 +281,9 @@ async def test_alert_toggle_changes_active_status(db_session, session_factory):
 
     async with session_factory() as session:
         project, _ = await create_project(session, name="toggle-alert.com", admin_chat_id=ADMIN_ID)
-        alert = await create_alert(session, project_id=project.id, event_name="toggle_ev", condition=AlertCondition.every)
+        alert = await create_alert(
+            session, project_id=project.id, event_name="toggle_ev", condition=AlertCondition.every
+        )
         await session.commit()
         pid = str(project.id)
         aid = str(alert.id)
@@ -271,8 +291,10 @@ async def test_alert_toggle_changes_active_status(db_session, session_factory):
 
     update, ctx = _make_callback(chat_id=ADMIN_ID, data=f"alert_t:{aid}")
 
-    with patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory), \
-         patch("app.bot.handlers.alerts.get_settings") as mock_settings:
+    with (
+        patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.alerts.get_settings") as mock_settings,
+    ):
         mock_settings.return_value.admin_chat_id = ADMIN_ID
         await alert_callback(update, ctx)
 
@@ -313,8 +335,10 @@ async def test_text_handler_captures_event_name(db_session, session_factory):
 
     update, ctx = _make_update(chat_id=ADMIN_ID, text="signup")
 
-    with patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory), \
-         patch("app.bot.handlers.alerts.get_settings") as mock_settings:
+    with (
+        patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.alerts.get_settings") as mock_settings,
+    ):
         mock_settings.return_value.admin_chat_id = ADMIN_ID
         await handle_text_message(update, ctx)
 
@@ -351,8 +375,10 @@ async def test_text_handler_captures_threshold_and_creates_alert(db_session, ses
 
     update, ctx = _make_update(chat_id=ADMIN_ID, text="50")
 
-    with patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory), \
-         patch("app.bot.handlers.alerts.get_settings") as mock_settings:
+    with (
+        patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.alerts.get_settings") as mock_settings,
+    ):
         mock_settings.return_value.admin_chat_id = ADMIN_ID
         await handle_text_message(update, ctx)
 
@@ -391,8 +417,10 @@ async def test_text_handler_rejects_invalid_threshold(db_session, session_factor
 
     update, ctx = _make_update(chat_id=ADMIN_ID, text="not-a-number")
 
-    with patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory), \
-         patch("app.bot.handlers.alerts.get_settings") as mock_settings:
+    with (
+        patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.alerts.get_settings") as mock_settings,
+    ):
         mock_settings.return_value.admin_chat_id = ADMIN_ID
         await handle_text_message(update, ctx)
 
@@ -423,8 +451,10 @@ async def test_condition_every_creates_alert_immediately(db_session, session_fac
 
     update, ctx = _make_callback(chat_id=ADMIN_ID, data="alert_cond:every")
 
-    with patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory), \
-         patch("app.bot.handlers.alerts.get_settings") as mock_settings:
+    with (
+        patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.alerts.get_settings") as mock_settings,
+    ):
         mock_settings.return_value.admin_chat_id = ADMIN_ID
         await alert_callback(update, ctx)
 
@@ -462,8 +492,10 @@ async def test_alert_notification_sent_on_fire(db_session, session_factory):
     mock_bot = MagicMock()
     mock_bot.send_message = AsyncMock()
 
-    with patch("app.api.ingestion.get_session_factory", return_value=session_factory), \
-         patch("app.bot.setup.get_bot", return_value=mock_bot):
+    with (
+        patch("app.api.ingestion.get_session_factory", return_value=session_factory),
+        patch("app.bot.setup.get_bot", return_value=mock_bot),
+    ):
         await _run_alert_evaluation(pid, "notify_event")
 
     mock_bot.send_message.assert_called_once()
@@ -494,8 +526,10 @@ async def test_alert_notification_message_varies_by_condition(db_session, sessio
     mock_bot = MagicMock()
     mock_bot.send_message = AsyncMock()
 
-    with patch("app.api.ingestion.get_session_factory", return_value=session_factory), \
-         patch("app.bot.setup.get_bot", return_value=mock_bot):
+    with (
+        patch("app.api.ingestion.get_session_factory", return_value=session_factory),
+        patch("app.bot.setup.get_bot", return_value=mock_bot),
+    ):
         for _ in range(10):
             await _run_alert_evaluation(pid, "ev_every_n")
 
@@ -518,8 +552,10 @@ async def test_no_notification_when_no_alerts_fire(db_session, session_factory):
     mock_bot = MagicMock()
     mock_bot.send_message = AsyncMock()
 
-    with patch("app.api.ingestion.get_session_factory", return_value=session_factory), \
-         patch("app.bot.setup.get_bot", return_value=mock_bot):
+    with (
+        patch("app.api.ingestion.get_session_factory", return_value=session_factory),
+        patch("app.bot.setup.get_bot", return_value=mock_bot),
+    ):
         await _run_alert_evaluation(pid, "some_event")
 
     mock_bot.send_message.assert_not_called()

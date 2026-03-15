@@ -43,20 +43,20 @@ async def show_alerts_menu(query, project_id_str: str, admin_chat_id: int) -> No
         label = _format_alert_label(alert)
         toggle_icon = "⏸️" if alert.is_active else "▶️"
         aid = str(alert.id)
-        rows.append([
-            InlineKeyboardButton(label, callback_data="alert_noop"),
-        ])
-        rows.append([
-            InlineKeyboardButton(toggle_icon, callback_data=f"alert_t:{aid}"),
-            InlineKeyboardButton("🗑", callback_data=f"alert_d:{aid}"),
-        ])
+        rows.append(
+            [
+                InlineKeyboardButton(label, callback_data="alert_noop"),
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(toggle_icon, callback_data=f"alert_t:{aid}"),
+                InlineKeyboardButton("🗑", callback_data=f"alert_d:{aid}"),
+            ]
+        )
 
-    rows.append([
-        InlineKeyboardButton("➕ Add alert", callback_data=f"alert_add:{project_id_str}")
-    ])
-    rows.append([
-        InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")
-    ])
+    rows.append([InlineKeyboardButton("➕ Add alert", callback_data=f"alert_add:{project_id_str}")])
+    rows.append([InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")])
 
     keyboard = InlineKeyboardMarkup(rows)
     await query.edit_message_text(
@@ -160,9 +160,15 @@ async def _handle_condition_choice(query, condition: str, admin_chat_id: int) ->
             await svc.clear(chat_id)
             await session.commit()
 
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("« Back to alerts", callback_data=f"back:alerts:{project_id_str}")]
-            ])
+            keyboard = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "« Back to alerts", callback_data=f"back:alerts:{project_id_str}"
+                        )
+                    ]
+                ]
+            )
             await query.edit_message_text(
                 f"✅ Alert created!\n\n"
                 f"Event: <b>{event_name}</b>\n"
@@ -186,9 +192,7 @@ async def _handle_condition_choice(query, condition: str, admin_chat_id: int) ->
                 prompt = "Enter the threshold (notify when exceeded per day):"
 
             await query.edit_message_text(
-                f"📝 <b>Add Alert</b>\n\n"
-                f"Event: <b>{event_name}</b>\n\n"
-                f"{prompt}",
+                f"📝 <b>Add Alert</b>\n\n" f"Event: <b>{event_name}</b>\n\n" f"{prompt}",
                 parse_mode="HTML",
             )
 
@@ -263,6 +267,7 @@ async def handle_text_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
                 handle_set_allowlist_text,
                 handle_set_retention_text,
             )
+
             if state.flow == "set_retention":
                 await handle_set_retention_text(update, session, svc, state)
             else:
@@ -290,13 +295,15 @@ async def handle_text_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
             )
             await session.commit()
 
-            keyboard = InlineKeyboardMarkup([
+            keyboard = InlineKeyboardMarkup(
                 [
-                    InlineKeyboardButton("Every", callback_data="alert_cond:every"),
-                    InlineKeyboardButton("Every N", callback_data="alert_cond:every_n"),
-                    InlineKeyboardButton("Threshold", callback_data="alert_cond:threshold"),
+                    [
+                        InlineKeyboardButton("Every", callback_data="alert_cond:every"),
+                        InlineKeyboardButton("Every N", callback_data="alert_cond:every_n"),
+                        InlineKeyboardButton("Threshold", callback_data="alert_cond:threshold"),
+                    ]
                 ]
-            ])
+            )
             await update.message.reply_text(
                 f"📝 <b>Add Alert</b>\n\n"
                 f"Event: <b>{event_name}</b>\n\n"
@@ -324,10 +331,14 @@ async def handle_text_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
             if not all([project_id_str, event_name, condition_str]):
                 await svc.clear(chat_id)
                 await session.commit()
-                await update.message.reply_text("❌ Invalid state. Please start again from the Alerts menu.")
+                await update.message.reply_text(
+                    "❌ Invalid state. Please start again from the Alerts menu."
+                )
                 return
 
-            condition = AlertCondition.every_n if condition_str == "every_n" else AlertCondition.threshold
+            condition = (
+                AlertCondition.every_n if condition_str == "every_n" else AlertCondition.threshold
+            )
 
             await create_alert(
                 session,
@@ -344,13 +355,17 @@ async def handle_text_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) ->
             else:
                 desc = f"notify when exceeds <b>{threshold_n}</b>/day"
 
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("« Back to alerts", callback_data=f"back:alerts:{project_id_str}")]
-            ])
+            keyboard = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "« Back to alerts", callback_data=f"back:alerts:{project_id_str}"
+                        )
+                    ]
+                ]
+            )
             await update.message.reply_text(
-                f"✅ Alert created!\n\n"
-                f"Event: <b>{event_name}</b>\n"
-                f"Condition: {desc}",
+                f"✅ Alert created!\n\n" f"Event: <b>{event_name}</b>\n" f"Condition: {desc}",
                 parse_mode="HTML",
                 reply_markup=keyboard,
             )

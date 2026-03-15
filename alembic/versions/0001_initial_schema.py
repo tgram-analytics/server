@@ -214,9 +214,7 @@ def upgrade() -> None:
         ),
         sa.Column(
             "chart_period",
-            postgresql.ENUM(
-                "7d", "30d", "90d", "1y", name="chart_period", create_type=False
-            ),
+            postgresql.ENUM("7d", "30d", "90d", "1y", name="chart_period", create_type=False),
             nullable=False,
         ),
         sa.Column("last_sent_at", sa.DateTime(timezone=True), nullable=True),

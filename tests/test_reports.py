@@ -60,21 +60,25 @@ async def test_show_reports_menu_with_events(db_session, session_factory):
 
         # Insert 5 pageviews and 2 signups
         for i in range(5):
-            session.add(Event(
-                project_id=pid,
-                event_name="pageview",
-                session_id=f"s{i}",
-                properties={},
-                timestamp=datetime.now(UTC) - timedelta(hours=i),
-            ))
+            session.add(
+                Event(
+                    project_id=pid,
+                    event_name="pageview",
+                    session_id=f"s{i}",
+                    properties={},
+                    timestamp=datetime.now(UTC) - timedelta(hours=i),
+                )
+            )
         for i in range(2):
-            session.add(Event(
-                project_id=pid,
-                event_name="signup",
-                session_id=f"u{i}",
-                properties={},
-                timestamp=datetime.now(UTC) - timedelta(hours=i),
-            ))
+            session.add(
+                Event(
+                    project_id=pid,
+                    event_name="signup",
+                    session_id=f"u{i}",
+                    properties={},
+                    timestamp=datetime.now(UTC) - timedelta(hours=i),
+                )
+            )
         await session.commit()
 
     query = MagicMock()
@@ -86,7 +90,7 @@ async def test_show_reports_menu_with_events(db_session, session_factory):
     query.edit_message_text.assert_called_once()
     text = query.edit_message_text.call_args[0][0]
     assert "busy-report.com" in text
-    assert "7" in text          # total = 7
+    assert "7" in text  # total = 7
     assert "pageview" in text
     assert "signup" in text
 
@@ -129,8 +133,10 @@ async def test_send_chart_photo_no_data(db_session, session_factory):
     query.edit_message_text = AsyncMock()
     query.message.reply_photo = AsyncMock()
 
-    with patch("app.bot.handlers.reports.get_session_factory", return_value=session_factory), \
-         patch("app.bot.handlers.reports.get_settings") as mock_cfg:
+    with (
+        patch("app.bot.handlers.reports.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.reports.get_settings") as mock_cfg,
+    ):
         mock_cfg.return_value.quickchart_url = "http://quickchart:3400"
         await send_chart_photo(query, pid, ADMIN_ID)
 
@@ -151,21 +157,28 @@ async def test_send_chart_photo_quickchart_unavailable(db_session, session_facto
         project, _ = await create_project(session, name="chart-fail.com", admin_chat_id=ADMIN_ID)
         await session.commit()
         pid = project.id
-        session.add(Event(
-            project_id=pid, event_name="pageview",
-            session_id="s1", properties={},
-            timestamp=datetime.now(UTC) - timedelta(hours=1),
-        ))
+        session.add(
+            Event(
+                project_id=pid,
+                event_name="pageview",
+                session_id="s1",
+                properties={},
+                timestamp=datetime.now(UTC) - timedelta(hours=1),
+            )
+        )
         await session.commit()
 
     query = MagicMock()
     query.edit_message_text = AsyncMock()
     query.message.reply_photo = AsyncMock()
 
-    with patch("app.bot.handlers.reports.get_session_factory", return_value=session_factory), \
-         patch("app.bot.handlers.reports.get_settings") as mock_cfg, \
-         patch("app.bot.handlers.reports.generate_line_chart",
-               side_effect=ChartGenerationError("down")):
+    with (
+        patch("app.bot.handlers.reports.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.reports.get_settings") as mock_cfg,
+        patch(
+            "app.bot.handlers.reports.generate_line_chart", side_effect=ChartGenerationError("down")
+        ),
+    ):
         mock_cfg.return_value.quickchart_url = "http://quickchart:3400"
         await send_chart_photo(query, str(pid), ADMIN_ID)
 
@@ -184,11 +197,15 @@ async def test_send_chart_photo_success(db_session, session_factory):
         project, _ = await create_project(session, name="chart-ok.com", admin_chat_id=ADMIN_ID)
         await session.commit()
         pid = project.id
-        session.add(Event(
-            project_id=pid, event_name="pageview",
-            session_id="s1", properties={},
-            timestamp=datetime.now(UTC) - timedelta(hours=1),
-        ))
+        session.add(
+            Event(
+                project_id=pid,
+                event_name="pageview",
+                session_id="s1",
+                properties={},
+                timestamp=datetime.now(UTC) - timedelta(hours=1),
+            )
+        )
         await session.commit()
 
     query = MagicMock()
@@ -197,19 +214,22 @@ async def test_send_chart_photo_success(db_session, session_factory):
 
     fake_png = b"\x89PNG\r\n\x1a\nfakepng"
 
-    with patch("app.bot.handlers.reports.get_session_factory", return_value=session_factory), \
-         patch("app.bot.handlers.reports.get_settings") as mock_cfg, \
-         patch("app.bot.handlers.reports.generate_line_chart",
-               return_value=fake_png) as mock_chart:
+    with (
+        patch("app.bot.handlers.reports.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.reports.get_settings") as mock_cfg,
+        patch("app.bot.handlers.reports.generate_line_chart", return_value=fake_png) as mock_chart,
+    ):
         mock_cfg.return_value.quickchart_url = "http://quickchart:3400"
         await send_chart_photo(query, str(pid), ADMIN_ID)
 
     mock_chart.assert_called_once()
     query.message.reply_photo.assert_called_once()
     call_kwargs = query.message.reply_photo.call_args
-    assert call_kwargs[1]["photo"] == fake_png or call_kwargs[0][0] == fake_png or \
-           ("photo" in str(call_kwargs) and fake_png in str(call_kwargs).encode())
+    assert (
+        call_kwargs[1]["photo"] == fake_png
+        or call_kwargs[0][0] == fake_png
+        or ("photo" in str(call_kwargs) and fake_png in str(call_kwargs).encode())
+    )
     # More robust: check the photo arg was our bytes
-    photo_arg = (call_kwargs[1].get("photo") or
-                 (call_kwargs[0][0] if call_kwargs[0] else None))
+    photo_arg = call_kwargs[1].get("photo") or (call_kwargs[0][0] if call_kwargs[0] else None)
     assert photo_arg == fake_png

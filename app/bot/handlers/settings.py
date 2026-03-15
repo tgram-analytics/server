@@ -45,13 +45,15 @@ async def show_settings_menu(query, project_id_str: str, admin_chat_id: int) -> 
         f"📅 Retention: <b>{retention_label}</b>\n"
         f"🌐 Allowlist: <b>{allowlist_label}</b>"
     )
-    keyboard = InlineKeyboardMarkup([
+    keyboard = InlineKeyboardMarkup(
         [
-            InlineKeyboardButton("✏️ Retention", callback_data=f"set_ret:{project_id_str}"),
-            InlineKeyboardButton("🌐 Allowlist", callback_data=f"set_dom:{project_id_str}"),
-        ],
-        [InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")],
-    ])
+            [
+                InlineKeyboardButton("✏️ Retention", callback_data=f"set_ret:{project_id_str}"),
+                InlineKeyboardButton("🌐 Allowlist", callback_data=f"set_dom:{project_id_str}"),
+            ],
+            [InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")],
+        ]
+    )
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 
@@ -97,9 +99,15 @@ async def start_set_allowlist(query, project_id_str: str, admin_chat_id: int) ->
         )
         await session.commit()
 
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🌍 Allow all origins", callback_data=f"allow_all:{project_id_str}")],
-    ])
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "🌍 Allow all origins", callback_data=f"allow_all:{project_id_str}"
+                )
+            ],
+        ]
+    )
     await query.edit_message_text(
         "🌐 <b>Domain allowlist</b>\n\n"
         "Enter allowed domains, comma-separated.\n\n"
@@ -171,8 +179,8 @@ async def handle_set_retention_text(update, session, svc, state) -> None:
         ps.retention_days = days
     else:
         session.add(ProjectSettings(project_id=pid, retention_days=days))
-    await session.flush()
     await svc.clear(chat_id)
+    await session.commit()
 
     label = f"{days} days" if days > 0 else "forever"
     await update.message.reply_text(
@@ -199,8 +207,8 @@ async def handle_set_allowlist_text(update, session, svc, state) -> None:
     await session.execute(
         sql_update(Project).where(Project.id == pid).values(domain_allowlist=domains)
     )
-    await session.flush()
     await svc.clear(chat_id)
+    await session.commit()
 
     if domains:
         label = ", ".join(domains)

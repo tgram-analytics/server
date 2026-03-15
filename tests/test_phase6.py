@@ -109,9 +109,10 @@ async def test_add_creates_project_and_shows_api_key(db_session, session_factory
     unique_name = f"mysite-{uuid.uuid4().hex[:8]}.com"
     update, ctx = _make_update(text=f"/add {unique_name}", args=[unique_name])
 
-    with patch(
-        "app.bot.handlers.projects.get_session_factory", return_value=session_factory
-    ), patch("app.bot.handlers.projects.get_settings") as mock_settings:
+    with (
+        patch("app.bot.handlers.projects.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.projects.get_settings") as mock_settings,
+    ):
         mock_settings.return_value.admin_chat_id = ADMIN_ID
         mock_settings.return_value.webhook_base_url = "https://example.com"
         await add_command(update, ctx)
@@ -137,9 +138,10 @@ async def test_projects_with_no_projects_sends_empty_message(db_session, session
 
     update, ctx = _make_update(text="/projects")
 
-    with patch(
-        "app.bot.handlers.projects.get_session_factory", return_value=session_factory
-    ), patch("app.bot.handlers.projects.get_settings") as mock_settings:
+    with (
+        patch("app.bot.handlers.projects.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.projects.get_settings") as mock_settings,
+    ):
         mock_settings.return_value.admin_chat_id = 999_999  # no projects for this chat id
         await projects_command(update, ctx)
 
@@ -158,9 +160,10 @@ async def test_projects_shows_keyboard_when_projects_exist(db_session, session_f
 
     update, ctx = _make_update(text="/projects")
 
-    with patch(
-        "app.bot.handlers.projects.get_session_factory", return_value=session_factory
-    ), patch("app.bot.handlers.projects.get_settings") as mock_settings:
+    with (
+        patch("app.bot.handlers.projects.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.projects.get_settings") as mock_settings,
+    ):
         mock_settings.return_value.admin_chat_id = ADMIN_ID
         await projects_command(update, ctx)
 
@@ -186,9 +189,10 @@ async def test_project_menu_shows_action_buttons(db_session, session_factory):
 
     update, ctx = _make_callback(chat_id=ADMIN_ID, data=f"proj:{pid}")
 
-    with patch(
-        "app.bot.handlers.projects.get_session_factory", return_value=session_factory
-    ), patch("app.bot.handlers.projects.get_settings") as mock_settings:
+    with (
+        patch("app.bot.handlers.projects.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.projects.get_settings") as mock_settings,
+    ):
         mock_settings.return_value.admin_chat_id = ADMIN_ID
         await project_callback(update, ctx)
 
@@ -228,9 +232,10 @@ async def test_confirm_delete_removes_project(db_session, session_factory):
 
     update, ctx = _make_callback(chat_id=ADMIN_ID, data=f"del_yes:{pid}")
 
-    with patch(
-        "app.bot.handlers.projects.get_session_factory", return_value=session_factory
-    ), patch("app.bot.handlers.projects.get_settings") as mock_settings:
+    with (
+        patch("app.bot.handlers.projects.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.projects.get_settings") as mock_settings,
+    ):
         mock_settings.return_value.admin_chat_id = ADMIN_ID
         await project_callback(update, ctx)
 
@@ -279,9 +284,10 @@ async def test_webhook_correct_token_dispatches_update(client):
     mock_app.bot = MagicMock()
     mock_app.process_update = AsyncMock()
 
-    with patch.object(bot_setup, "_application", mock_app), patch(
-        "app.api.webhook.Update"
-    ) as mock_update_cls:
+    with (
+        patch.object(bot_setup, "_application", mock_app),
+        patch("app.api.webhook.Update") as mock_update_cls,
+    ):
         mock_update_cls.de_json = MagicMock(return_value=MagicMock())
         resp = await client.post(f"/webhook/{TEST_TOKEN}", json={"update_id": 42})
 

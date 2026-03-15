@@ -119,7 +119,9 @@ async def list_event_names(
         .group_by(Event.event_name)
         .order_by(func.count().desc())
     )
-    return [{"event_name": r.event_name, "count": r.count, "last_seen": r.last_seen} for r in result]
+    return [
+        {"event_name": r.event_name, "count": r.count, "last_seen": r.last_seen} for r in result
+    ]
 
 
 async def compare_periods(

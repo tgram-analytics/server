@@ -49,7 +49,7 @@ async def add_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     snippet = (
         f"curl -X POST {base}/api/v1/track \\\n"
         f'  -H "Content-Type: application/json" \\\n'
-        f"  -d '{{\"api_key\": \"{api_key}\", "
+        f'  -d \'{{"api_key": "{api_key}", '
         f'"event_name": "page_view", "session_id": "user-123"}}\''
     )
 
@@ -193,25 +193,15 @@ async def _show_project_menu(query, project_id_str: str, admin_chat_id: int) -> 
     keyboard = InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton(
-                    "📋 Events", callback_data=f"menu:events:{project_id_str}"
-                ),
-                InlineKeyboardButton(
-                    "📈 Reports", callback_data=f"menu:reports:{project_id_str}"
-                ),
+                InlineKeyboardButton("📋 Events", callback_data=f"menu:events:{project_id_str}"),
+                InlineKeyboardButton("📈 Reports", callback_data=f"menu:reports:{project_id_str}"),
             ],
             [
-                InlineKeyboardButton(
-                    "🔔 Alerts", callback_data=f"menu:alerts:{project_id_str}"
-                ),
-                InlineKeyboardButton(
-                    "⚙️ Settings", callback_data=f"menu:settings:{project_id_str}"
-                ),
+                InlineKeyboardButton("🔔 Alerts", callback_data=f"menu:alerts:{project_id_str}"),
+                InlineKeyboardButton("⚙️ Settings", callback_data=f"menu:settings:{project_id_str}"),
             ],
             [
-                InlineKeyboardButton(
-                    "🗑 Delete", callback_data=f"del_ask:{project_id_str}"
-                ),
+                InlineKeyboardButton("🗑 Delete", callback_data=f"del_ask:{project_id_str}"),
             ],
             [
                 InlineKeyboardButton("« Back", callback_data="back:projects"),
@@ -229,12 +219,8 @@ async def _ask_delete_confirmation(query, project_id_str: str) -> None:
     keyboard = InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton(
-                    "✅ Yes, delete", callback_data=f"del_yes:{project_id_str}"
-                ),
-                InlineKeyboardButton(
-                    "❌ Cancel", callback_data=f"del_no:{project_id_str}"
-                ),
+                InlineKeyboardButton("✅ Yes, delete", callback_data=f"del_yes:{project_id_str}"),
+                InlineKeyboardButton("❌ Cancel", callback_data=f"del_no:{project_id_str}"),
             ]
         ]
     )

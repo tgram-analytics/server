@@ -43,9 +43,7 @@ async def list_alerts(
 ) -> list[Alert]:
     """Return all alerts for a project, ordered by creation time."""
     result = await session.execute(
-        select(Alert)
-        .where(Alert.project_id == project_id)
-        .order_by(Alert.created_at)
+        select(Alert).where(Alert.project_id == project_id).order_by(Alert.created_at)
     )
     return list(result.scalars().all())
 
@@ -56,7 +54,7 @@ async def get_alert(
     project_id: uuid.UUID | None = None,
 ) -> Alert | None:
     """Return an alert by ID, or None if not found.
-    
+
     If project_id is provided, also verifies the alert belongs to that project.
     """
     query = select(Alert).where(Alert.id == alert_id)

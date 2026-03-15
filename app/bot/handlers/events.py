@@ -35,7 +35,10 @@ async def events_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton(f"📊 {p.name}", callback_data=f"menu:events:{p.id}")] for p in projects]
+        [
+            [InlineKeyboardButton(f"📊 {p.name}", callback_data=f"menu:events:{p.id}")]
+            for p in projects
+        ]
     )
     await update.message.reply_text("Select a project to browse events:", reply_markup=keyboard)
 
@@ -98,9 +101,11 @@ async def show_events_menu(query, project_id_str: str, admin_chat_id: int) -> No
         await session.commit()
 
     if not events:
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")],
-        ])
+        keyboard = InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")],
+            ]
+        )
         await query.edit_message_text(
             f"📭 <b>{project.name}</b> — no events received yet.",
             parse_mode="HTML",
@@ -170,16 +175,25 @@ async def _show_event_detail(query, event_name: str, admin_chat_id: int) -> None
         # Compute stats
         now = datetime.now(UTC)
         count_24h = await count_events(
-            session, project_id=pid, event_name=event_name,
-            start=now - timedelta(hours=24), end=now,
+            session,
+            project_id=pid,
+            event_name=event_name,
+            start=now - timedelta(hours=24),
+            end=now,
         )
         count_7d = await count_events(
-            session, project_id=pid, event_name=event_name,
-            start=now - timedelta(days=7), end=now,
+            session,
+            project_id=pid,
+            event_name=event_name,
+            start=now - timedelta(days=7),
+            end=now,
         )
         count_30d = await count_events(
-            session, project_id=pid, event_name=event_name,
-            start=now - timedelta(days=30), end=now,
+            session,
+            project_id=pid,
+            event_name=event_name,
+            start=now - timedelta(days=30),
+            end=now,
         )
 
         # Update state with selected event
@@ -200,13 +214,15 @@ async def _show_event_detail(query, event_name: str, admin_chat_id: int) -> None
         f"Last 30d: <b>{count_30d:,}</b>"
     )
 
-    keyboard = InlineKeyboardMarkup([
+    keyboard = InlineKeyboardMarkup(
         [
-            InlineKeyboardButton("🔔 Add Alert", callback_data="evta:alert"),
-            InlineKeyboardButton("📊 Chart (7d)", callback_data="evta:chart"),
-        ],
-        [InlineKeyboardButton("« Back to Events", callback_data="back:events")],
-    ])
+            [
+                InlineKeyboardButton("🔔 Add Alert", callback_data="evta:alert"),
+                InlineKeyboardButton("📊 Chart (7d)", callback_data="evta:chart"),
+            ],
+            [InlineKeyboardButton("« Back to Events", callback_data="back:events")],
+        ]
+    )
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 
@@ -241,13 +257,15 @@ async def _start_alert_for_event(query, admin_chat_id: int) -> None:
         )
         await session.commit()
 
-    keyboard = InlineKeyboardMarkup([
+    keyboard = InlineKeyboardMarkup(
         [
-            InlineKeyboardButton("Every", callback_data="alert_cond:every"),
-            InlineKeyboardButton("Every N", callback_data="alert_cond:every_n"),
-            InlineKeyboardButton("Threshold", callback_data="alert_cond:threshold"),
+            [
+                InlineKeyboardButton("Every", callback_data="alert_cond:every"),
+                InlineKeyboardButton("Every N", callback_data="alert_cond:every_n"),
+                InlineKeyboardButton("Threshold", callback_data="alert_cond:threshold"),
+            ]
         ]
-    ])
+    )
     await query.edit_message_text(
         f"📝 <b>Add Alert</b>\n\n"
         f"Event: <b>{event_name}</b>\n\n"
@@ -296,9 +314,11 @@ async def _send_event_chart(query, admin_chat_id: int) -> None:
             granularity="day",
         )
 
-    back_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("« Back", callback_data="back:events")],
-    ])
+    back_keyboard = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("« Back", callback_data="back:events")],
+        ]
+    )
 
     if not data:
         await query.edit_message_text(
@@ -326,9 +346,11 @@ async def _send_event_chart(query, admin_chat_id: int) -> None:
     await query.edit_message_text(
         f"📊 <b>{event_name}</b> — last 7 days  ↓",
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("« Back to Events", callback_data="back:events")],
-        ]),
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("« Back to Events", callback_data="back:events")],
+            ]
+        ),
     )
     await query.message.reply_photo(
         photo=png_bytes,

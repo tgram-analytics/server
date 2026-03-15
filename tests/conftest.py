@@ -65,9 +65,7 @@ async def client() -> AsyncClient:
 
     from fastapi import FastAPI
 
-    os.environ.setdefault(
-        "TELEGRAM_BOT_TOKEN", "1234567890:test-token-for-testing-only"
-    )
+    os.environ.setdefault("TELEGRAM_BOT_TOKEN", "1234567890:test-token-for-testing-only")
     os.environ.setdefault("ADMIN_CHAT_ID", "123456789")
     os.environ.setdefault(
         "DATABASE_URL",

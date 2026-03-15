@@ -55,7 +55,9 @@ def build_application(token: str, admin_chat_id: int) -> Application:
     app.add_handler(CallbackQueryHandler(project_callback))
 
     # Text messages for multi-step conversation flows (e.g., add-alert)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, handle_text_message))
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, handle_text_message)
+    )
 
     return app
 

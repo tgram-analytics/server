@@ -38,7 +38,9 @@ async def test_show_settings_menu_defaults(db_session, session_factory):
     from app.services.projects import create_project
 
     async with session_factory() as session:
-        project, _ = await create_project(session, name="settings-default.com", admin_chat_id=ADMIN_ID)
+        project, _ = await create_project(
+            session, name="settings-default.com", admin_chat_id=ADMIN_ID
+        )
         await session.commit()
         pid = str(project.id)
 
@@ -120,8 +122,10 @@ async def test_set_retention_updates_database(db_session, session_factory):
 
     update, ctx = _make_message(chat_id=ADMIN_ID, text="30")
 
-    with patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory), \
-         patch("app.bot.handlers.alerts.get_settings") as mock_settings:
+    with (
+        patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.alerts.get_settings") as mock_settings,
+    ):
         mock_settings.return_value.admin_chat_id = ADMIN_ID
         await handle_text_message(update, ctx)
 
@@ -154,8 +158,10 @@ async def test_set_retention_invalid_input(db_session, session_factory):
 
     update, ctx = _make_message(chat_id=ADMIN_ID, text="not-a-number")
 
-    with patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory), \
-         patch("app.bot.handlers.alerts.get_settings") as mock_settings:
+    with (
+        patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.alerts.get_settings") as mock_settings,
+    ):
         mock_settings.return_value.admin_chat_id = ADMIN_ID
         await handle_text_message(update, ctx)
 
@@ -183,8 +189,10 @@ async def test_set_retention_forever(db_session, session_factory):
 
     update, ctx = _make_message(chat_id=ADMIN_ID, text="0")
 
-    with patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory), \
-         patch("app.bot.handlers.alerts.get_settings") as mock_settings:
+    with (
+        patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.alerts.get_settings") as mock_settings,
+    ):
         mock_settings.return_value.admin_chat_id = ADMIN_ID
         await handle_text_message(update, ctx)
 
@@ -222,8 +230,10 @@ async def test_set_allowlist_updates_project(db_session, session_factory):
 
     update, ctx = _make_message(chat_id=ADMIN_ID, text="myapp.com, api.myapp.com")
 
-    with patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory), \
-         patch("app.bot.handlers.alerts.get_settings") as mock_settings:
+    with (
+        patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory),
+        patch("app.bot.handlers.alerts.get_settings") as mock_settings,
+    ):
         mock_settings.return_value.admin_chat_id = ADMIN_ID
         await handle_text_message(update, ctx)
 
@@ -231,9 +241,7 @@ async def test_set_allowlist_updates_project(db_session, session_factory):
     assert "myapp.com" in text
 
     async with session_factory() as session:
-        result = await session.execute(
-            select(Project).where(Project.id == uuid.UUID(pid))
-        )
+        result = await session.execute(select(Project).where(Project.id == uuid.UUID(pid)))
         p = result.scalar_one()
         assert "myapp.com" in p.domain_allowlist
         assert "api.myapp.com" in p.domain_allowlist
@@ -254,9 +262,7 @@ async def test_allow_all_button_clears_allowlist(db_session, session_factory):
         pid = str(project.id)
         # Pre-set an allowlist
         await session.execute(
-            sql_update(Project)
-            .where(Project.id == project.id)
-            .values(domain_allowlist=["old.com"])
+            sql_update(Project).where(Project.id == project.id).values(domain_allowlist=["old.com"])
         )
         await session.commit()
 
@@ -272,8 +278,6 @@ async def test_allow_all_button_clears_allowlist(db_session, session_factory):
     assert "cleared" in text.lower() or "all origins" in text.lower()
 
     async with session_factory() as session:
-        result = await session.execute(
-            select(Project).where(Project.id == uuid.UUID(pid))
-        )
+        result = await session.execute(select(Project).where(Project.id == uuid.UUID(pid)))
         p = result.scalar_one()
         assert p.domain_allowlist == []

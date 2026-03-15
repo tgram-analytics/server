@@ -71,9 +71,7 @@ async def _run_alert_evaluation(project_id: uuid.UUID, event_name: str) -> None:
                 len(fired),
             )
 
-            result = await session.execute(
-                select(Project).where(Project.id == project_id)
-            )
+            result = await session.execute(select(Project).where(Project.id == project_id))
             project = result.scalar_one_or_none()
             if project is None:
                 log.warning("project not found for alert notification: %s", project_id)
@@ -82,10 +80,7 @@ async def _run_alert_evaluation(project_id: uuid.UUID, event_name: str) -> None:
             bot = get_bot()
             for alert in fired:
                 if alert.condition == AlertCondition.every:
-                    msg = (
-                        f"🔔 Event <b>{event_name}</b> received "
-                        f"on <b>{project.name}</b>"
-                    )
+                    msg = f"🔔 Event <b>{event_name}</b> received " f"on <b>{project.name}</b>"
                 elif alert.condition == AlertCondition.every_n:
                     msg = (
                         f"🔔 Event <b>{event_name}</b> received "
