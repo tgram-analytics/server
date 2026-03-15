@@ -10,9 +10,10 @@ _HELP_TEXT = (
     "📖 <b>Available commands</b>\n\n"
     "/add <i>name</i> — create a new project and get its API key\n"
     "/projects — list all your projects\n"
+    "/events — browse event types for a project\n"
     "/help — show this message\n"
     "/cancel — cancel the current operation\n\n"
-    "💡 <b>Tip:</b> Manage alerts via /projects → select a project → Alerts"
+    "💡 <b>Tip:</b> Use /events to see all event types, then tap one to add alerts or view charts"
 )
 
 

@@ -8,6 +8,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from app.bot.handlers.alerts import show_alerts_menu
+from app.bot.handlers.events import show_events_menu
 from app.bot.handlers.reports import send_chart_photo, show_reports_menu
 from app.bot.handlers.settings import (
     handle_allow_all,
@@ -114,6 +115,10 @@ async def project_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
     elif data.startswith("del_no:"):
         await _show_project_menu(query, data[7:], admin_chat_id)
 
+    elif data.startswith("menu:events:"):
+        project_id_str = data[12:]
+        await show_events_menu(query, project_id_str, admin_chat_id)
+
     elif data.startswith("menu:alerts:"):
         project_id_str = data[12:]
         await show_alerts_menu(query, project_id_str, admin_chat_id)
@@ -189,16 +194,21 @@ async def _show_project_menu(query, project_id_str: str, admin_chat_id: int) -> 
         [
             [
                 InlineKeyboardButton(
-                    "📈 Reports", callback_data=f"menu:reports:{project_id_str}"
+                    "📋 Events", callback_data=f"menu:events:{project_id_str}"
                 ),
                 InlineKeyboardButton(
-                    "🔔 Alerts", callback_data=f"menu:alerts:{project_id_str}"
+                    "📈 Reports", callback_data=f"menu:reports:{project_id_str}"
                 ),
             ],
             [
                 InlineKeyboardButton(
+                    "🔔 Alerts", callback_data=f"menu:alerts:{project_id_str}"
+                ),
+                InlineKeyboardButton(
                     "⚙️ Settings", callback_data=f"menu:settings:{project_id_str}"
                 ),
+            ],
+            [
                 InlineKeyboardButton(
                     "🗑 Delete", callback_data=f"del_ask:{project_id_str}"
                 ),

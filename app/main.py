@@ -4,6 +4,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as health_router
 from app.api.ingestion import router as ingestion_router
@@ -39,6 +40,17 @@ def create_app() -> FastAPI:
         ),
         version="0.1.0",
         lifespan=lifespan,
+    )
+
+    # Allow browsers to make cross-origin requests to the ingestion endpoints.
+    # Fine-grained per-project origin validation is handled in ingestion.py via
+    # the domain_allowlist; CORS middleware just lets the browser proceed past
+    # the preflight check.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["POST", "GET"],
+        allow_headers=["Content-Type"],
     )
 
     app.include_router(health_router)

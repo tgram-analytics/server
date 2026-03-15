@@ -103,6 +103,25 @@ async def top_properties(
     return [{"value": row.value, "count": row.count} for row in result]
 
 
+async def list_event_names(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    """Return distinct event names with count and last-seen time, ordered by count desc."""
+    result = await session.execute(
+        select(
+            Event.event_name,
+            func.count().label("count"),
+            func.max(Event.timestamp).label("last_seen"),
+        )
+        .where(Event.project_id == project_id)
+        .group_by(Event.event_name)
+        .order_by(func.count().desc())
+    )
+    return [{"event_name": r.event_name, "count": r.count, "last_seen": r.last_seen} for r in result]
+
+
 async def compare_periods(
     session: AsyncSession,
     *,

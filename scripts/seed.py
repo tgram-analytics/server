@@ -21,7 +21,6 @@ Options:
 """
 
 import argparse
-import json
 import random
 import sys
 import uuid
@@ -64,7 +63,14 @@ PAGES = [
     "/dashboard",
 ]
 
-BUTTONS = ["cta-hero", "pricing-monthly", "pricing-annual", "try-free", "get-started", "learn-more"]
+BUTTONS = [
+    "cta-hero",
+    "pricing-monthly",
+    "pricing-annual",
+    "try-free",
+    "get-started",
+    "learn-more",
+]
 
 PLANS = ["free", "pro", "enterprise"]
 
@@ -86,7 +92,10 @@ def _random_properties(event_name: str) -> dict:
     if event_name == "form_submit":
         return {"form_id": "contact-form", "page": "/contact"}
     if event_name == "signup":
-        return {"plan": random.choice(PLANS), "source": random.choice(["organic", "paid", "referral"])}
+        return {
+            "plan": random.choice(PLANS),
+            "source": random.choice(["organic", "paid", "referral"]),
+        }
     if event_name == "login":
         return {"method": random.choice(["email", "google", "github"])}
     if event_name == "purchase":
@@ -95,7 +104,11 @@ def _random_properties(event_name: str) -> dict:
     if event_name == "add_to_cart":
         return {"plan": random.choice(PLANS), "page": "/pricing"}
     if event_name == "search":
-        return {"query": random.choice(["analytics", "pricing", "docs", "api", "integrations"])}
+        return {
+            "query": random.choice(
+                ["analytics", "pricing", "docs", "api", "integrations"]
+            )
+        }
     if event_name == "video_play":
         return {"video_id": random.choice(["intro", "demo", "tutorial"])}
     if event_name == "download":
@@ -126,7 +139,10 @@ def create_project(base_url: str, secret_key: str, project_name: str) -> str:
             headers={"X-Internal-Key": secret_key},
         )
     if resp.status_code != 201:
-        print(f"[ERROR] Failed to create project: {resp.status_code} {resp.text}", file=sys.stderr)
+        print(
+            f"[ERROR] Failed to create project: {resp.status_code} {resp.text}",
+            file=sys.stderr,
+        )
         sys.exit(1)
     data = resp.json()
     print(f"[OK] Created project '{project_name}'  id={data['id']}")
@@ -162,18 +178,24 @@ def send_event(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Seed the tg-analytics server with test events.",
+        description="Seed the tgram-analytics server with test events.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--url", default="http://localhost:8000", help="Server base URL")
+    parser.add_argument(
+        "--url", default="http://localhost:8000", help="Server base URL"
+    )
     parser.add_argument("--key", required=True, help="SECRET_KEY / X-Internal-Key")
     parser.add_argument("--project", default="demo-site.com", help="Project name")
-    parser.add_argument("--events", type=int, default=100, help="Number of events to send")
+    parser.add_argument(
+        "--events", type=int, default=100, help="Number of events to send"
+    )
     parser.add_argument(
         "--spread-days", type=int, default=7, help="Spread timestamps over N past days"
     )
-    parser.add_argument("--api-key", default="", help="Existing project API key (skips creation)")
+    parser.add_argument(
+        "--api-key", default="", help="Existing project API key (skips creation)"
+    )
     args = parser.parse_args()
 
     print(f"[>>] Targeting server: {args.url}")
@@ -186,7 +208,9 @@ def main() -> None:
         api_key = create_project(args.url, args.key, args.project)
 
     # ── Step 2: fire events ────────────────────────────────────────────────────
-    print(f"[>>] Sending {args.events} events spread over last {args.spread_days} day(s)…")
+    print(
+        f"[>>] Sending {args.events} events spread over last {args.spread_days} day(s)…"
+    )
 
     ok = fail = 0
     # Simulate ~20 concurrent "users" with stable session IDs
@@ -220,7 +244,10 @@ def main() -> None:
         print(f"  {name:<20} ~{approx}")
 
     if fail > 0:
-        print(f"\n[WARN] {fail} events failed. Check the server URL and api_key.", file=sys.stderr)
+        print(
+            f"\n[WARN] {fail} events failed. Check the server URL and api_key.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 
