@@ -5,17 +5,68 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update
 from telegram.ext import ContextTypes
 
 from app.bot.states import BotStateService
 from app.core.config import get_settings
 from app.core.database import get_session_factory
-from app.services.analytics import count_events, events_over_time, list_event_names
-from app.services.charts import ChartGenerationError, generate_line_chart
+from app.services.analytics import compare_periods, count_events, events_over_time, list_event_names
+from app.services.charts import ChartGenerationError, generate_comparison_chart, generate_line_chart
 from app.services.projects import get_project, list_projects
 
-# ── /events command ──────────────────────────────────────────────────────────
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+_PERIODS: dict[str, timedelta] = {
+    "7d": timedelta(days=7),
+    "30d": timedelta(days=30),
+    "90d": timedelta(days=90),
+}
+
+_PERIOD_LABEL: dict[str, str] = {
+    "7d": "last 7 days",
+    "30d": "last 30 days",
+    "90d": "last 90 days",
+}
+
+
+# ── Keyboard helper ────────────────────────────────────────────────────────────
+
+
+def _event_chart_keyboard(period: str, gran: str) -> InlineKeyboardMarkup:
+    """Inline keyboard for a per-event chart photo.
+
+    Period switching and comparison use session state for project_id/event_name.
+    """
+    period_row = [
+        InlineKeyboardButton(
+            f"✓ {p}" if p == period else p,
+            callback_data=f"evta:prd:{p}:{gran}",
+        )
+        for p in _PERIODS
+    ]
+    gran_row = [
+        InlineKeyboardButton(
+            f"✓ by {g}" if g == gran else f"by {g}",
+            callback_data=f"evta:prd:{period}:{g}",
+        )
+        for g in ("day", "week")
+    ]
+    return InlineKeyboardMarkup(
+        [
+            period_row,
+            gran_row,
+            [
+                InlineKeyboardButton(
+                    "⚖️ Compare vs prior period", callback_data=f"evta:cmp:{period}:{gran}"
+                )
+            ],
+            [InlineKeyboardButton("« Back to Events", callback_data="back:events")],
+        ]
+    )
+
+
+# ── /events command ────────────────────────────────────────────────────────────
 
 
 async def events_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -43,7 +94,7 @@ async def events_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text("Select a project to browse events:", reply_markup=keyboard)
 
 
-# ── Callback dispatcher ─────────────────────────────────────────────────────
+# ── Callback dispatcher ────────────────────────────────────────────────────────
 
 
 async def events_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -73,8 +124,20 @@ async def events_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     elif data == "evta:chart":
         await _send_event_chart(query, admin_chat_id)
 
+    elif data.startswith("evta:prd:"):
+        # evta:prd:{period}:{gran}
+        parts = data[9:].split(":", 1)
+        if len(parts) == 2:
+            await _update_event_chart(query, admin_chat_id, period=parts[0], gran=parts[1])
 
-# ── Events list ──────────────────────────────────────────────────────────────
+    elif data.startswith("evta:cmp:"):
+        # evta:cmp:{period}:{gran}
+        parts = data[9:].split(":", 1)
+        if len(parts) == 2:
+            await _send_event_comparison(query, admin_chat_id, period=parts[0], gran=parts[1])
+
+
+# ── Events list ────────────────────────────────────────────────────────────────
 
 
 async def show_events_menu(query, project_id_str: str, admin_chat_id: int) -> None:
@@ -90,7 +153,6 @@ async def show_events_menu(query, project_id_str: str, admin_chat_id: int) -> No
 
         events = await list_event_names(session, project_id=pid)
 
-        # Save project_id in conversation state for subsequent callbacks
         svc = BotStateService(session)
         await svc.save(
             query.message.chat_id,
@@ -102,9 +164,7 @@ async def show_events_menu(query, project_id_str: str, admin_chat_id: int) -> No
 
     if not events:
         keyboard = InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")],
-            ]
+            [[InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")]]
         )
         await query.edit_message_text(
             f"📭 <b>{project.name}</b> — no events received yet.",
@@ -120,11 +180,10 @@ async def show_events_menu(query, project_id_str: str, admin_chat_id: int) -> No
 
     rows.append([InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")])
 
-    keyboard = InlineKeyboardMarkup(rows)
     await query.edit_message_text(
         f"📋 <b>Events for {project.name}</b>\n─────────────────\nTap an event to view details:",
         parse_mode="HTML",
-        reply_markup=keyboard,
+        reply_markup=InlineKeyboardMarkup(rows),
     )
 
 
@@ -147,7 +206,7 @@ async def _show_events_list_from_state(query, admin_chat_id: int) -> None:
     await show_events_menu(query, project_id_str, admin_chat_id)
 
 
-# ── Event detail ─────────────────────────────────────────────────────────────
+# ── Event detail ───────────────────────────────────────────────────────────────
 
 
 async def _show_event_detail(query, event_name: str, admin_chat_id: int) -> None:
@@ -172,7 +231,6 @@ async def _show_event_detail(query, event_name: str, admin_chat_id: int) -> None
             await query.edit_message_text("❌ Project not found.")
             return
 
-        # Compute stats
         now = datetime.now(UTC)
         count_24h = await count_events(
             session,
@@ -196,7 +254,6 @@ async def _show_event_detail(query, event_name: str, admin_chat_id: int) -> None
             end=now,
         )
 
-        # Update state with selected event
         await svc.save(
             query.message.chat_id,
             flow="events",
@@ -226,7 +283,7 @@ async def _show_event_detail(query, event_name: str, admin_chat_id: int) -> None
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 
-# ── Actions ──────────────────────────────────────────────────────────────────
+# ── Actions ────────────────────────────────────────────────────────────────────
 
 
 async def _start_alert_for_event(query, admin_chat_id: int) -> None:
@@ -248,7 +305,6 @@ async def _start_alert_for_event(query, admin_chat_id: int) -> None:
             await query.edit_message_text("❌ Session expired. Use /events to start again.")
             return
 
-        # Transition to add_alert flow at the condition step (skip event_name input)
         await svc.save(
             query.message.chat_id,
             flow="add_alert",
@@ -278,8 +334,10 @@ async def _start_alert_for_event(query, admin_chat_id: int) -> None:
     )
 
 
-async def _send_event_chart(query, admin_chat_id: int) -> None:
-    """Generate and send a 7-day line chart for the selected event."""
+async def _send_event_chart(
+    query, admin_chat_id: int, period: str = "7d", gran: str = "day"
+) -> None:
+    """Generate and send a line chart for the selected event as a new photo reply."""
     factory = get_session_factory()
     async with factory() as session:
         svc = BotStateService(session)
@@ -304,25 +362,23 @@ async def _send_event_chart(query, admin_chat_id: int) -> None:
             return
 
         now = datetime.now(UTC)
-        seven_days_ago = now - timedelta(days=7)
         data = await events_over_time(
             session,
             project_id=pid,
             event_name=event_name,
-            start=seven_days_ago,
+            start=now - _PERIODS.get(period, timedelta(days=7)),
             end=now,
-            granularity="day",
+            granularity=gran,
         )
 
+    period_label = _PERIOD_LABEL.get(period, period)
     back_keyboard = InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("« Back", callback_data="back:events")],
-        ]
+        [[InlineKeyboardButton("« Back to Events", callback_data="back:events")]]
     )
 
     if not data:
         await query.edit_message_text(
-            f"📭 No data for <b>{event_name}</b> in the last 7 days.",
+            f"📭 No data for <b>{event_name}</b> in the {period_label}.",
             parse_mode="HTML",
             reply_markup=back_keyboard,
         )
@@ -333,7 +389,7 @@ async def _send_event_chart(query, admin_chat_id: int) -> None:
         png_bytes = await generate_line_chart(
             data,
             title=event_name,
-            period_label="Last 7 days",
+            period_label=period_label,
             quickchart_url=settings.quickchart_url,
         )
     except ChartGenerationError:
@@ -344,15 +400,175 @@ async def _send_event_chart(query, admin_chat_id: int) -> None:
         return
 
     await query.edit_message_text(
-        f"📊 <b>{event_name}</b> — last 7 days  ↓",
+        f"📊 <b>{event_name}</b> — {period_label}  ↓",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("« Back to Events", callback_data="back:events")],
-            ]
+            [[InlineKeyboardButton("« Back to Events", callback_data="back:events")]]
         ),
     )
     await query.message.reply_photo(
         photo=png_bytes,
-        caption=f"📈 {project.name} · {event_name} · last 7 days",
+        caption=f"📈 {project.name} · {event_name} · {period_label}",
+        reply_markup=_event_chart_keyboard(period, gran),
+    )
+
+
+async def _update_event_chart(query, admin_chat_id: int, period: str, gran: str) -> None:
+    """Edit the existing event chart photo in-place with a new period/granularity."""
+    factory = get_session_factory()
+    async with factory() as session:
+        svc = BotStateService(session)
+        state = await svc.get(query.message.chat_id)
+
+        if state is None or state.flow != "events" or state.step != "detail":
+            await query.answer("❌ Session expired.", show_alert=True)
+            return
+
+        payload = state.payload or {}
+        project_id_str = payload.get("project_id")
+        event_name = payload.get("event_name")
+
+        if not project_id_str or not event_name:
+            await query.answer("❌ Session expired.", show_alert=True)
+            return
+
+        pid = uuid.UUID(project_id_str)
+        project = await get_project(session, pid, admin_chat_id)
+        if project is None:
+            await query.answer("❌ Project not found.", show_alert=True)
+            return
+
+        now = datetime.now(UTC)
+        data = await events_over_time(
+            session,
+            project_id=pid,
+            event_name=event_name,
+            start=now - _PERIODS.get(period, timedelta(days=7)),
+            end=now,
+            granularity=gran,
+        )
+
+    period_label = _PERIOD_LABEL.get(period, period)
+
+    if not data:
+        await query.answer(f"No data for {period_label}.", show_alert=True)
+        return
+
+    settings = get_settings()
+    try:
+        png_bytes = await generate_line_chart(
+            data,
+            title=event_name,
+            period_label=period_label,
+            quickchart_url=settings.quickchart_url,
+        )
+    except ChartGenerationError:
+        await query.answer("⚠️ Chart service unavailable.", show_alert=True)
+        return
+
+    await query.edit_message_media(
+        media=InputMediaPhoto(
+            media=png_bytes,
+            caption=f"📈 {project.name} · {event_name} · {period_label}",
+        ),
+        reply_markup=_event_chart_keyboard(period, gran),
+    )
+
+
+async def _send_event_comparison(query, admin_chat_id: int, period: str, gran: str) -> None:
+    """Edit the event chart photo to show current vs prior period comparison."""
+    factory = get_session_factory()
+    async with factory() as session:
+        svc = BotStateService(session)
+        state = await svc.get(query.message.chat_id)
+
+        if state is None or state.flow != "events" or state.step != "detail":
+            await query.answer("❌ Session expired.", show_alert=True)
+            return
+
+        payload = state.payload or {}
+        project_id_str = payload.get("project_id")
+        event_name = payload.get("event_name")
+
+        if not project_id_str or not event_name:
+            await query.answer("❌ Session expired.", show_alert=True)
+            return
+
+        pid = uuid.UUID(project_id_str)
+        project = await get_project(session, pid, admin_chat_id)
+        if project is None:
+            await query.answer("❌ Project not found.", show_alert=True)
+            return
+
+        delta = _PERIODS.get(period, timedelta(days=7))
+        now = datetime.now(UTC)
+        current_start = now - delta
+        previous_start = current_start - delta
+
+        data_current = await events_over_time(
+            session,
+            project_id=pid,
+            event_name=event_name,
+            start=current_start,
+            end=now,
+            granularity=gran,
+        )
+        if not data_current:
+            await query.answer(f"No data for {_PERIOD_LABEL.get(period, period)}.", show_alert=True)
+            return
+
+        data_previous = await events_over_time(
+            session,
+            project_id=pid,
+            event_name=event_name,
+            start=previous_start,
+            end=current_start,
+            granularity=gran,
+        )
+
+        cmp = await compare_periods(
+            session,
+            project_id=pid,
+            event_name=event_name,
+            current_start=current_start,
+            current_end=now,
+            previous_start=previous_start,
+            previous_end=current_start,
+        )
+
+    period_label = _PERIOD_LABEL.get(period, period)
+    delta_pct = cmp["delta_pct"]
+    if delta_pct is None:
+        delta_str = "vs prior period (no prior data)"
+    elif delta_pct >= 0:
+        delta_str = f"+{delta_pct:.1f}% vs prior period"
+    else:
+        delta_str = f"{delta_pct:.1f}% vs prior period"
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("← Back to chart", callback_data=f"evta:prd:{period}:{gran}")],
+            [InlineKeyboardButton("« Back to Events", callback_data="back:events")],
+        ]
+    )
+
+    settings = get_settings()
+    try:
+        png_bytes = await generate_comparison_chart(
+            data_current,
+            data_previous,
+            label_a=f"Current ({period_label})",
+            label_b=f"Prior {period_label}",
+            quickchart_url=settings.quickchart_url,
+        )
+    except ChartGenerationError:
+        await query.answer("⚠️ Chart service unavailable.", show_alert=True)
+        return
+
+    await query.edit_message_media(
+        media=InputMediaPhoto(
+            media=png_bytes,
+            caption=f"📊 {project.name} · {event_name} · {delta_str}",
+        ),
+        reply_markup=keyboard,
     )

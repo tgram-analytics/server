@@ -9,7 +9,13 @@ from telegram.ext import ContextTypes
 
 from app.bot.handlers.alerts import show_alerts_menu
 from app.bot.handlers.events import show_events_menu
-from app.bot.handlers.reports import send_chart_photo, show_reports_menu
+from app.bot.handlers.reports import (
+    handle_report_project_pick,
+    send_chart_photo,
+    send_report_comparison,
+    show_reports_menu,
+    update_report_chart,
+)
 from app.bot.handlers.settings import (
     handle_allow_all,
     show_settings_menu,
@@ -130,6 +136,26 @@ async def project_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> No
     elif data.startswith("rpt_chart:"):
         project_id_str = data[10:]
         await send_chart_photo(query, project_id_str, admin_chat_id)
+
+    elif data.startswith("rpt_prd:"):
+        # rpt_prd:{project_id}:{period}:{gran}
+        parts = data[8:].rsplit(":", 2)
+        if len(parts) == 3:
+            await update_report_chart(
+                query, parts[0], admin_chat_id, period=parts[1], gran=parts[2]
+            )
+
+    elif data.startswith("rpt_cmp:"):
+        # rpt_cmp:{project_id}:{period}:{gran}
+        parts = data[8:].rsplit(":", 2)
+        if len(parts) == 3:
+            await send_report_comparison(
+                query, parts[0], admin_chat_id, period=parts[1], gran=parts[2]
+            )
+
+    elif data.startswith("rpt_pp:"):
+        project_id_str = data[7:]
+        await handle_report_project_pick(query, project_id_str, admin_chat_id, ctx)
 
     elif data.startswith("menu:settings:"):
         project_id_str = data[14:]

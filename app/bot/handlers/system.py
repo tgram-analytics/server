@@ -11,9 +11,10 @@ _HELP_TEXT = (
     "/add <i>name</i> — create a new project and get its API key\n"
     "/projects — list all your projects\n"
     "/events — browse event types for a project\n"
+    "/report [event] — send a chart for an event (7d / 30d / 90d, day / week)\n"
     "/help — show this message\n"
     "/cancel — cancel the current operation\n\n"
-    "💡 <b>Tip:</b> Use /events to see all event types, then tap one to add alerts or view charts"
+    "💡 <b>Tip:</b> Charts support period switching and period-over-period comparison"
 )
 
 
