@@ -8,6 +8,7 @@ Origin check:   project's domain_allowlist; empty list = allow all.
 import uuid
 from collections import defaultdict, deque
 from time import monotonic
+from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,7 +43,9 @@ def _is_rate_limited(project_id: uuid.UUID, limit: int) -> bool:
 # ── Background task helper ─────────────────────────────────────────────────
 
 
-async def _run_alert_evaluation(project_id: uuid.UUID, event_name: str) -> None:
+async def _run_alert_evaluation(
+    project_id: uuid.UUID, event_name: str, properties: dict[str, Any] | None = None
+) -> None:
     """Background task: evaluate alerts after event insertion.
 
     Creates its own session so it can run after the HTTP response is sent.
@@ -93,6 +96,10 @@ async def _run_alert_evaluation(project_id: uuid.UUID, event_name: str) -> None:
                         f"🔔 Event <b>{event_name}</b> exceeded "
                         f"<b>{alert.threshold_n}</b> today on <b>{project.name}</b>"
                     )
+
+                if properties:
+                    lines = [f"<b>{k}:</b> {v}" for k, v in properties.items()]
+                    msg += "\n\n" + "\n".join(lines)
 
                 aid = str(alert.id)
                 keyboard = InlineKeyboardMarkup(
@@ -172,7 +179,7 @@ async def track(
     )
     await session.commit()
 
-    background_tasks.add_task(_run_alert_evaluation, project.id, body.event_name)
+    background_tasks.add_task(_run_alert_evaluation, project.id, body.event_name, body.properties)
     return {"status": "accepted"}
 
 
@@ -208,5 +215,5 @@ async def pageview(
     )
     await session.commit()
 
-    background_tasks.add_task(_run_alert_evaluation, project.id, "pageview")
+    background_tasks.add_task(_run_alert_evaluation, project.id, "pageview", properties)
     return {"status": "accepted"}
