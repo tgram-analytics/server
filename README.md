@@ -184,6 +184,47 @@ make downgrade
 
 ---
 
+## Privacy posture
+
+The server is designed so that self-hosters meet GDPR's data-minimisation
+expectations out of the box, and so the cloud version (Phase 6+) inherits
+the same protections.
+
+- **Visitor identification.** No cookies, no client-side fingerprinting.
+  Each event is tagged with a 16-character hash of
+  `sha256(daily_salt || project_id || client_ip || user_agent)`. The
+  daily salt rotates every UTC midnight, so the same visitor cannot be
+  re-identified across days. Raw IP and raw User-Agent are never persisted.
+- **User-Agent parsing.** UA strings are parsed by `ua-parser` into
+  `browser`, `os`, and `device_type` (mobile/tablet/desktop/bot/unknown).
+  The raw string is dropped before insertion.
+- **PII tripwire on `properties`.** A small key denylist (email, phone,
+  ssn, password, token, credit_card, card_number, cvv, iban, tax_id)
+  silently drops matching keys at ingestion time and increments an
+  internal counter — the request still returns `202` so a hostile
+  caller cannot probe the rule by watching status codes. Properties
+  larger than 4 KB are zeroed out the same way.
+- **Log redaction.** A root-logger filter masks `proj_<64hex>`,
+  `sk_(live|test)_*` API keys, and inline `email=…` / `password=…`
+  patterns in every emitted log line.
+- **Retention.** A nightly APScheduler job (03:00 UTC) deletes events
+  older than each project's `retention_days`. A value of `0` keeps
+  events forever — the default for self-host.
+- **Audit log.** Destructive actions (project create/delete, settings
+  changes, API-key rotation, suspension) are written to an append-only
+  `audit_events` table. A Postgres trigger rejects UPDATE and DELETE
+  for every row and every role, including the application role itself.
+
+### `REDIS_URL` (optional)
+
+`get_today_salt()` falls back to a process-local cache when `REDIS_URL`
+is unset, which is fine for single-replica self-host. **For multi-replica
+deployments, set `REDIS_URL`** so all replicas share the same daily salt;
+otherwise the same visitor will hash to different IDs depending on which
+replica handled the request.
+
+---
+
 ## Architecture
 
 ```
