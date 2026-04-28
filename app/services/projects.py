@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.security import generate_api_key, hash_api_key
 from app.models.project import Project
 from app.models.settings import ProjectSettings
+from app.services.audit import write_audit
 
 
 async def create_project(
@@ -71,6 +72,16 @@ async def create_project(
     await session.flush()
 
     await session.refresh(project)
+
+    await write_audit(
+        session,
+        user_id=owner_user_id,
+        action="project.create",
+        target_type="project",
+        target_id=str(project.id),
+        metadata={"name": project.name},
+    )
+
     return project, api_key
 
 
