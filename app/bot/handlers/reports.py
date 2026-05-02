@@ -7,6 +7,7 @@ Also handles the /report <event> command.
 
 from __future__ import annotations
 
+import html
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -165,7 +166,7 @@ async def show_reports_menu(
 
     period = f"{seven_days_ago.strftime('%-d %b')} – {now.strftime('%-d %b')}"
     lines = [
-        f"📈 <b>Report: {project.name}</b>",
+        f"📈 <b>Report: {html.escape(project.name)}</b>",
         f"<i>{period}</i>",
         "─────────────────",
         f"📊 Total events: <b>{total:,}</b>",
@@ -175,7 +176,7 @@ async def show_reports_menu(
     if top_events:
         lines.append("\n<b>Top events (7 days):</b>")
         for row in top_events:
-            lines.append(f"  • {row.event_name}: <b>{row.cnt:,}</b>")
+            lines.append(f"  • {html.escape(row.event_name)}: <b>{row.cnt:,}</b>")
     else:
         lines.append("\n<i>No events in the last 7 days.</i>")
 
@@ -242,7 +243,7 @@ async def send_chart_photo(
 
     # Edit original message to a nav anchor, then send photo below it
     await query.edit_message_text(
-        f"📊 <b>{chart_event}</b> — {period_label}  ↓",
+        f"📊 <b>{html.escape(chart_event)}</b> — {period_label}  ↓",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(
             [
@@ -471,7 +472,7 @@ async def report_command(
             ]
         )
         await update.message.reply_text(
-            f"📊 Chart <b>{event_name}</b> — pick a project:",
+            f"📊 Chart <b>{html.escape(event_name)}</b> — pick a project:",
             parse_mode="HTML",
             reply_markup=keyboard,
         )
@@ -519,7 +520,7 @@ async def handle_report_project_pick(
 
     if not data:
         await query.edit_message_text(
-            f"📭 No data for <b>{event_name}</b> in the {period_label}.",
+            f"📭 No data for <b>{html.escape(event_name)}</b> in the {period_label}.",
             parse_mode="HTML",
             reply_markup=back_keyboard,
         )
@@ -537,7 +538,7 @@ async def handle_report_project_pick(
         return
 
     await query.edit_message_text(
-        f"📊 <b>{event_name}</b> — {period_label}  ↓",
+        f"📊 <b>{html.escape(event_name)}</b> — {period_label}  ↓",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(
             [[InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")]]
@@ -573,7 +574,7 @@ async def _send_report_chart_as_message(
 
     if not data:
         await message.reply_text(
-            f"📭 No data for <b>{event_name}</b> in the {period_label}.",
+            f"📭 No data for <b>{html.escape(event_name)}</b> in the {period_label}.",
             parse_mode="HTML",
         )
         return

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -73,7 +74,7 @@ async def show_alerts_menu(
 
     keyboard = InlineKeyboardMarkup(rows)
     await query.edit_message_text(
-        f"🔔 <b>Alerts for {project.name}</b>\n─────────────────",
+        f"🔔 <b>Alerts for {html.escape(project.name)}</b>\n─────────────────",
         parse_mode="HTML",
         reply_markup=keyboard,
     )
@@ -103,7 +104,7 @@ async def alerts_command(
 
     lines = ["🔔 <b>Active Alerts</b>\n"]
     for project_name, alerts in by_project.items():
-        lines.append(f"📁 <b>{project_name}</b>")
+        lines.append(f"📁 <b>{html.escape(project_name)}</b>")
         for alert in alerts:
             if alert.condition == AlertCondition.every:
                 desc = "every occurrence"
@@ -111,7 +112,7 @@ async def alerts_command(
                 desc = f"every {alert.threshold_n} occurrences"
             else:
                 desc = f">{alert.threshold_n}/day"
-            lines.append(f"  • {alert.event_name} ({desc})")
+            lines.append(f"  • {html.escape(alert.event_name)} ({desc})")
         lines.append("")
 
     total = sum(len(v) for v in by_project.values())
@@ -243,7 +244,7 @@ async def _handle_condition_choice(
             )
             await query.edit_message_text(
                 f"✅ Alert created!\n\n"
-                f"Event: <b>{event_name}</b>\n"
+                f"Event: <b>{html.escape(event_name)}</b>\n"
                 f"Condition: notify on <b>every</b> occurrence",
                 parse_mode="HTML",
                 reply_markup=keyboard,
@@ -264,7 +265,7 @@ async def _handle_condition_choice(
                 prompt = "Enter the threshold (notify when exceeded per day):"
 
             await query.edit_message_text(
-                f"📝 <b>Add Alert</b>\n\nEvent: <b>{event_name}</b>\n\n{prompt}",
+                f"📝 <b>Add Alert</b>\n\nEvent: <b>{html.escape(event_name)}</b>\n\n{prompt}",
                 parse_mode="HTML",
             )
 
@@ -381,7 +382,7 @@ async def handle_text_message(
         )
         await update.message.reply_text(
             f"📝 <b>Add Alert</b>\n\n"
-            f"Event: <b>{event_name}</b>\n\n"
+            f"Event: <b>{html.escape(event_name)}</b>\n\n"
             f"Choose when to notify:\n"
             f"• <b>Every</b> — on every occurrence\n"
             f"• <b>Every N</b> — every Nth occurrence\n"
@@ -441,7 +442,7 @@ async def handle_text_message(
             ]
         )
         await update.message.reply_text(
-            f"✅ Alert created!\n\nEvent: <b>{event_name_val}</b>\nCondition: {desc}",
+            f"✅ Alert created!\n\nEvent: <b>{html.escape(event_name_val)}</b>\nCondition: {desc}",
             parse_mode="HTML",
             reply_markup=keyboard,
         )

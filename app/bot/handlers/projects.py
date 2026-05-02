@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -86,13 +87,18 @@ async def add_command(
     from app.bot.handlers.onboarding import post_create_keyboard
 
     await update.message.reply_text(
-        f"✅ Project <b>{name}</b> created!\n\n"
+        f"✅ Project <b>{html.escape(name)}</b> created!\n\n"
         f"⚠️ Save this key — it won't be shown again.\n\n"
         f"<b>Env:</b>\n<tg-spoiler><pre>{env_block}</pre></tg-spoiler>\n\n"
         f"<b>Test it now (curl):</b>\n<pre>{snippet}</pre>\n\n"
         f"Or pick your stack 👇",
         parse_mode="HTML",
         reply_markup=post_create_keyboard(project.id),
+    )
+
+    # Immediately prompt for the domain allowlist for this fresh project.
+    await prompt_allowlist_after_create(
+        update.message, project_id_str=str(project.id), project_name=name
     )
 
     # Immediately prompt for the domain allowlist for this fresh project.
@@ -370,7 +376,7 @@ async def _show_project_menu(
         ]
     )
     await query.edit_message_text(
-        f"📊 <b>{project.name}</b>\n─────────────────\nWhat would you like to do?",
+        f"📊 <b>{html.escape(project.name)}</b>\n─────────────────\nWhat would you like to do?",
         parse_mode="HTML",
         reply_markup=keyboard,
     )
