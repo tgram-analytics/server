@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -84,7 +85,7 @@ async def show_funnels_menu(query: CallbackQuery, project_id_str: str, admin_cha
     rows.append([InlineKeyboardButton("➕ Add Funnel", callback_data=f"fnl_add:{project_id_str}")])
     rows.append([InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")])
 
-    text = f"🔀 <b>Funnels: {project.name}</b>\n─────────────────"
+    text = f"🔀 <b>Funnels: {html.escape(project.name)}</b>\n─────────────────"
     if not funnels:
         text += "\n\n<i>No funnels yet. Create one to track conversions.</i>"
 
@@ -219,7 +220,7 @@ async def handle_funnel_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> 
 
     keyboard = _event_picker_keyboard(events, selected=[])
     await update.message.reply_text(
-        f"🔀 <b>{name}</b>\n\n"
+        f"🔀 <b>{html.escape(name)}</b>\n\n"
         "Tap events in the order users go through them.\n"
         "Selected: <i>none</i>",
         parse_mode="HTML",
@@ -277,11 +278,11 @@ async def _add_event_to_funnel(query: CallbackQuery, event_name: str) -> None:
         await session.commit()
 
     funnel_name = payload.get("name", "Funnel")
-    steps_text = " → ".join(selected) if selected else "<i>none</i>"
+    steps_text = " → ".join(html.escape(s) for s in selected) if selected else "<i>none</i>"
     keyboard = _event_picker_keyboard(events, selected)
 
     await query.edit_message_text(
-        f"🔀 <b>{funnel_name}</b>\n\nSelected: {steps_text}\n\nTap more events or press Done.",
+        f"🔀 <b>{html.escape(funnel_name)}</b>\n\nSelected: {steps_text}\n\nTap more events or press Done.",
         parse_mode="HTML",
         reply_markup=keyboard,
     )
@@ -312,7 +313,7 @@ async def _finalize_events(query: CallbackQuery) -> None:
         await session.commit()
 
     funnel_name = payload.get("name", "Funnel")
-    steps_text = " → ".join(selected)
+    steps_text = " → ".join(html.escape(s) for s in selected)
 
     keyboard = InlineKeyboardMarkup(
         [
@@ -328,7 +329,7 @@ async def _finalize_events(query: CallbackQuery) -> None:
     )
 
     await query.edit_message_text(
-        f"🔀 <b>{funnel_name}</b>\n\n"
+        f"🔀 <b>{html.escape(funnel_name)}</b>\n\n"
         f"Steps: {steps_text}\n\n"
         "How long should a user have to complete the funnel?",
         parse_mode="HTML",
@@ -378,7 +379,7 @@ async def _pick_time_window(query: CallbackQuery, window_key: str, admin_chat_id
         await session.commit()
 
     window_label = TIME_WINDOW_LABEL.get(window_key, window_key)
-    steps_text = " → ".join(steps)
+    steps_text = " → ".join(html.escape(s) for s in steps)
 
     keyboard = InlineKeyboardMarkup(
         [
@@ -399,7 +400,7 @@ async def _pick_time_window(query: CallbackQuery, window_key: str, admin_chat_id
 
     await query.edit_message_text(
         f"✅ <b>Funnel created!</b>\n\n"
-        f"Name: <b>{funnel_name}</b>\n"
+        f"Name: <b>{html.escape(funnel_name)}</b>\n"
         f"Steps: {steps_text}\n"
         f"Time window: {window_label}",
         parse_mode="HTML",
@@ -453,7 +454,7 @@ async def _view_funnel(
             ]
         )
         await query.edit_message_text(
-            f"📭 <b>{funnel.name}</b> — no data for {period_label}.",
+            f"📭 <b>{html.escape(funnel.name)}</b> — no data for {period_label}.",
             parse_mode="HTML",
             reply_markup=keyboard,
         )
@@ -487,16 +488,17 @@ async def _view_funnel(
     summary_lines = []
     for i, row in enumerate(data):
         pct = round(row["count"] / first_count * 100) if first_count else 0
+        safe_step = html.escape(str(row["step"]))
         if i == 0:
-            summary_lines.append(f"  {row['step']}: <b>{row['count']:,}</b>")
+            summary_lines.append(f"  {safe_step}: <b>{row['count']:,}</b>")
         else:
-            summary_lines.append(f"  → {row['step']}: <b>{row['count']:,}</b> ({pct}%)")
+            summary_lines.append(f"  → {safe_step}: <b>{row['count']:,}</b> ({pct}%)")
 
     caption = f"🔀 {project.name} · {funnel.name} · {period_label}\n⏱ Window: {window_label}"
 
     # Edit current message as anchor
     await query.edit_message_text(
-        f"🔀 <b>{funnel.name}</b> — {period_label}\n"
+        f"🔀 <b>{html.escape(funnel.name)}</b> — {period_label}\n"
         f"⏱ {window_label}\n"
         f"─────────────────\n" + "\n".join(summary_lines),
         parse_mode="HTML",

@@ -7,6 +7,7 @@ bar charts per dimension.
 
 from __future__ import annotations
 
+import html
 import uuid
 from datetime import UTC, datetime
 
@@ -76,7 +77,7 @@ async def _build_visitors_text(
     period_label = PERIOD_LABEL.get(period, period)
 
     lines = [
-        f"👥 <b>Visitors: {project_name}</b>",
+        f"👥 <b>Visitors: {html.escape(project_name)}</b>",
         f"<i>{period_label}</i>",
         "─────────────────",
     ]
@@ -99,7 +100,8 @@ async def _build_visitors_text(
         total = sum(r["count"] for r in rows)
         for r in rows:
             pct = round(r["count"] / total * 100) if total else 0
-            lines.append(f"  • {r['value']}: <b>{r['count']:,}</b> ({pct}%)")
+            safe_value = html.escape(str(r["value"]))
+            lines.append(f"  • {safe_value}: <b>{r['count']:,}</b> ({pct}%)")
 
     return "\n".join(lines)
 

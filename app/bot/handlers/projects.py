@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import uuid
 
 from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -68,7 +69,7 @@ async def add_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
     await update.message.reply_text(
-        f"✅ Project <b>{name}</b> created!\n\n"
+        f"✅ Project <b>{html.escape(name)}</b> created!\n\n"
         f"⚠️ Save this key — it won't be shown again.\n\n"
         f"<b>Env:</b>\n<tg-spoiler><pre>{env_block}</pre></tg-spoiler>\n\n"
         f"<b>Quickstart:</b>\n<pre>{snippet}</pre>",
@@ -336,7 +337,7 @@ async def _show_project_menu(query: CallbackQuery, project_id_str: str, admin_ch
         ]
     )
     await query.edit_message_text(
-        f"📊 <b>{project.name}</b>\n─────────────────\nWhat would you like to do?",
+        f"📊 <b>{html.escape(project.name)}</b>\n─────────────────\nWhat would you like to do?",
         parse_mode="HTML",
         reply_markup=keyboard,
     )

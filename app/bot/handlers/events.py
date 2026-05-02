@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -195,7 +196,7 @@ async def show_events_menu(query: CallbackQuery, project_id_str: str, admin_chat
             [[InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")]]
         )
         await query.edit_message_text(
-            f"📭 <b>{project.name}</b> — no events received yet.",
+            f"📭 <b>{html.escape(project.name)}</b> — no events received yet.",
             parse_mode="HTML",
             reply_markup=keyboard,
         )
@@ -209,7 +210,7 @@ async def show_events_menu(query: CallbackQuery, project_id_str: str, admin_chat
     rows.append([InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")])
 
     await query.edit_message_text(
-        f"📋 <b>Events for {project.name}</b>\n─────────────────\nTap an event to view details:",
+        f"📋 <b>Events for {html.escape(project.name)}</b>\n─────────────────\nTap an event to view details:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(rows),
     )
@@ -293,8 +294,8 @@ async def _show_event_detail(query: CallbackQuery, event_name: str, admin_chat_i
         await session.commit()
 
     text = (
-        f"📋 <b>{event_name}</b>\n"
-        f"<i>{project.name}</i>\n"
+        f"📋 <b>{html.escape(event_name)}</b>\n"
+        f"<i>{html.escape(project.name)}</i>\n"
         f"─────────────────\n"
         f"Last 24h: <b>{count_24h:,}</b>\n"
         f"Last 7d: <b>{count_7d:,}</b>\n"
@@ -356,7 +357,7 @@ async def _start_alert_for_event(query: CallbackQuery, admin_chat_id: int) -> No
     )
     await query.edit_message_text(
         f"📝 <b>Add Alert</b>\n\n"
-        f"Event: <b>{event_name}</b>\n\n"
+        f"Event: <b>{html.escape(event_name)}</b>\n\n"
         f"Choose when to notify:\n"
         f"• <b>Every</b> — on every occurrence\n"
         f"• <b>Every N</b> — every Nth occurrence\n"
@@ -411,7 +412,7 @@ async def _send_event_chart(
 
     if not data:
         await query.edit_message_text(
-            f"📭 No data for <b>{event_name}</b> in the {period_label}.",
+            f"📭 No data for <b>{html.escape(event_name)}</b> in the {period_label}.",
             parse_mode="HTML",
             reply_markup=back_keyboard,
         )
@@ -433,7 +434,7 @@ async def _send_event_chart(
         return
 
     await query.edit_message_text(
-        f"📊 <b>{event_name}</b> — {period_label}  ↓",
+        f"📊 <b>{html.escape(event_name)}</b> — {period_label}  ↓",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(
             [[InlineKeyboardButton("« Back to Events", callback_data="back:events")]]
@@ -656,7 +657,7 @@ async def _show_pie_property_picker(query: CallbackQuery, admin_chat_id: int) ->
     rows.append([InlineKeyboardButton("« Back", callback_data=f"evt:{event_name}")])
 
     await query.edit_message_text(
-        f"🥧 <b>Pie chart for {event_name}</b>\n\nPick a property to break down:",
+        f"🥧 <b>Pie chart for {html.escape(event_name)}</b>\n\nPick a property to break down:",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(rows),
     )
@@ -727,7 +728,7 @@ async def _send_event_pie_chart(
         return
 
     await query.edit_message_text(
-        f"🥧 <b>{event_name}</b> · {property_key}  ↓",
+        f"🥧 <b>{html.escape(event_name)}</b> · {html.escape(property_key)}  ↓",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(
             [
