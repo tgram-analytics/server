@@ -2,6 +2,7 @@
 
 > Self-hosted, privacy-first analytics controlled entirely through a Telegram bot.
 > No dashboard. No third parties. Just Telegram.
+> Or skip the setup — try the hosted version at [@MyTelegramAnalyticsBot](https://t.me/MyTelegramAnalyticsBot).
 
 [![CI](https://github.com/tgram-analytics/server/actions/workflows/ci.yml/badge.svg)](https://github.com/tgram-analytics/server/actions/workflows/ci.yml)
 [![License: FSL-1.1-ALv2](https://img.shields.io/badge/License-FSL--1.1--ALv2-blue.svg)](LICENSE)
@@ -67,7 +68,7 @@ curl -X POST https://your-server.com/api/v1/track \
   -H "Content-Type: application/json" \
   -d '{
     "api_key": "proj_xxxxxxxxxxxx",
-    "event": "purchase",
+    "event_name": "purchase",
     "session_id": "uuid-here",
     "properties": {"amount": 49, "plan": "pro"}
   }'
@@ -187,8 +188,8 @@ make downgrade
 ## Privacy posture
 
 The server is designed so that self-hosters meet GDPR's data-minimisation
-expectations out of the box, and so the cloud version (Phase 6+) inherits
-the same protections.
+expectations out of the box, and so the managed version we operate at
+@MyTelegramAnalyticsBot inherits the same protections.
 
 - **Visitor identification.** No cookies, no client-side fingerprinting.
   Each event is tagged with a 16-character hash of
