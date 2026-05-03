@@ -82,11 +82,24 @@ async def start_set_retention(
         )
         await session.commit()
 
+    from app.core.config import get_settings
+
+    cap = get_settings().max_retention_days
+    if cap is None:
+        body = (
+            "How many days should raw events be kept?\n"
+            "Enter <b>0</b> to keep events forever.\n\n"
+            "<i>Type a number (e.g. 30, 90, 365):</i>"
+        )
+    else:
+        body = (
+            f"How many days should raw events be kept?\n"
+            f"This deployment caps retention at <b>{cap} days</b>.\n\n"
+            f"<i>Type a number between 1 and {cap}:</i>"
+        )
+
     await query.edit_message_text(
-        "📅 <b>Set retention period</b>\n\n"
-        "How many days should raw events be kept?\n"
-        "Enter <b>0</b> to keep events forever.\n\n"
-        "<i>Type a number (e.g. 30, 90, 365):</i>",
+        f"📅 <b>Set retention period</b>\n\n{body}",
         parse_mode="HTML",
     )
 
@@ -208,13 +221,31 @@ async def handle_set_retention_text(
     chat_id = update.effective_chat.id
     text = (update.message.text or "").strip()
 
+    from app.core.config import get_settings
+
+    cap = get_settings().max_retention_days
+
     try:
         days = int(text)
         if days < 0:
             raise ValueError
     except ValueError:
+        if cap is None:
+            await update.message.reply_text(
+                "⚠️ Please enter a non-negative integer (e.g. 30, 90, 0 for forever)."
+            )
+        else:
+            await update.message.reply_text(f"⚠️ Please enter an integer between 1 and {cap}.")
+        return
+
+    # On capped deployments (cloud free tier), 0 = "forever" is not
+    # allowed because it would bypass the cap entirely; nor is any
+    # value above the cap.
+    if cap is not None and (days == 0 or days > cap):
         await update.message.reply_text(
-            "⚠️ Please enter a non-negative integer (e.g. 30, 90, 0 for forever)."
+            f"⚠️ This deployment limits retention to <b>{cap} days</b>. "
+            f"Please pick a value between 1 and {cap}.",
+            parse_mode="HTML",
         )
         return
 

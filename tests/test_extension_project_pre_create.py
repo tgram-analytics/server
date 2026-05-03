@@ -74,7 +74,7 @@ async def test_single_hook_called_with_inputs() -> None:
     """A registered hook receives session + the create_project kwargs."""
     from app.services.projects import create_project
 
-    hook = AsyncMock()
+    hook = AsyncMock(return_value=None)
     ext.register_project_pre_create(hook)
 
     session = _make_session()
@@ -295,6 +295,185 @@ async def test_quota_pattern_realistic_use_case() -> None:
         await create_project(
             session,
             name="second-project",
+            admin_chat_id=1,
+            owner_user_id=uuid.uuid4(),
+        )
+
+    session.add.assert_not_called()
+
+
+async def test_hook_returning_override_dict_applies_to_project() -> None:
+    """A hook may return a dict of whitelisted column overrides.
+
+    The values land on the new ``Project`` row instead of the model
+    defaults. Used by cloud overlays to set ``rate_limit_per_second``
+    per plan tier at create time.
+    """
+    from app.services.projects import create_project
+
+    async def overriding_hook(session, **kwargs):  # noqa: ANN001 - test
+        return {"rate_limit_per_second": 10}
+
+    ext.register_project_pre_create(overriding_hook)
+
+    session = _make_session()
+    added: list = []
+    session.add.side_effect = lambda obj: added.append(obj)
+
+    await create_project(
+        session,
+        name="x",
+        admin_chat_id=1,
+        owner_user_id=uuid.uuid4(),
+    )
+
+    project_row = added[0]
+    assert project_row.rate_limit_per_second == 10
+
+
+async def test_hook_override_targets_project_settings_when_field_in_settings_whitelist() -> None:
+    """Whitelisted ``retention_days`` lands on ``ProjectSettings``, not ``Project``.
+
+    The cloud overlay returns a single flat dict with keys destined
+    for both rows (e.g., ``rate_limit_per_second`` for Project and
+    ``retention_days`` for ProjectSettings). ``create_project`` must
+    route each key to the right model based on the whitelist
+    membership.
+    """
+    from app.models.project import Project as ProjectModel
+    from app.models.settings import ProjectSettings
+    from app.services.projects import create_project
+
+    async def cloud_like_hook(session, **kwargs):  # noqa: ANN001 - test
+        return {"rate_limit_per_second": 10, "retention_days": 60}
+
+    ext.register_project_pre_create(cloud_like_hook)
+
+    session = _make_session()
+    added: list = []
+    session.add.side_effect = lambda obj: added.append(obj)
+
+    await create_project(
+        session,
+        name="x",
+        admin_chat_id=1,
+        owner_user_id=uuid.uuid4(),
+    )
+
+    project_row = next(o for o in added if isinstance(o, ProjectModel))
+    settings_row = next(o for o in added if isinstance(o, ProjectSettings))
+    assert project_row.rate_limit_per_second == 10
+    assert settings_row.retention_days == 60
+
+
+async def test_hook_returning_none_keeps_defaults() -> None:
+    """A hook returning ``None`` (or implicitly) leaves columns at default."""
+    from app.services.projects import create_project
+
+    async def noop_hook(session, **kwargs):  # noqa: ANN001 - test
+        return None
+
+    ext.register_project_pre_create(noop_hook)
+
+    session = _make_session()
+    added: list = []
+    session.add.side_effect = lambda obj: added.append(obj)
+
+    await create_project(
+        session,
+        name="x",
+        admin_chat_id=1,
+        owner_user_id=uuid.uuid4(),
+    )
+
+    project_row = added[0]
+    assert project_row.rate_limit_per_second is None
+
+
+async def test_multiple_hooks_overrides_merge_last_write_wins() -> None:
+    """When two hooks both set the same key, registration order decides."""
+    from app.services.projects import create_project
+
+    async def hook_a(session, **kwargs):  # noqa: ANN001 - test
+        return {"rate_limit_per_second": 5}
+
+    async def hook_b(session, **kwargs):  # noqa: ANN001 - test
+        return {"rate_limit_per_second": 50}
+
+    ext.register_project_pre_create(hook_a)
+    ext.register_project_pre_create(hook_b)
+
+    session = _make_session()
+    added: list = []
+    session.add.side_effect = lambda obj: added.append(obj)
+
+    await create_project(
+        session,
+        name="x",
+        admin_chat_id=1,
+        owner_user_id=uuid.uuid4(),
+    )
+
+    assert added[0].rate_limit_per_second == 50
+
+
+async def test_hook_override_with_non_whitelisted_key_is_ignored(caplog) -> None:
+    """Returning a key outside ``PROJECT_OVERRIDABLE_FIELDS`` is ignored.
+
+    We do not want plugins to be able to set arbitrary columns through
+    this seam (e.g., ``api_key_hash`` or ``owner_user_id``). Unknown
+    keys log a warning and are dropped; whitelisted keys still apply.
+    """
+    import logging
+
+    from app.services.projects import create_project
+
+    async def sneaky_hook(session, **kwargs):  # noqa: ANN001 - test
+        return {
+            "rate_limit_per_second": 7,
+            "owner_user_id": uuid.uuid4(),  # NOT whitelisted
+            "api_key_hash": "haxx",  # NOT whitelisted
+        }
+
+    ext.register_project_pre_create(sneaky_hook)
+
+    session = _make_session()
+    added: list = []
+    session.add.side_effect = lambda obj: added.append(obj)
+
+    legit_owner = uuid.uuid4()
+    with caplog.at_level(logging.WARNING, logger="app.services.projects"):
+        await create_project(
+            session,
+            name="x",
+            admin_chat_id=1,
+            owner_user_id=legit_owner,
+        )
+
+    project_row = added[0]
+    assert project_row.rate_limit_per_second == 7  # whitelisted: applied
+    assert project_row.owner_user_id == legit_owner  # ignored: caller's value wins
+    assert project_row.api_key_hash != "haxx"  # ignored: real hash
+    # Each non-whitelisted key produces a warning.
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("owner_user_id" in r.getMessage() for r in warnings)
+    assert any("api_key_hash" in r.getMessage() for r in warnings)
+
+
+async def test_hook_returning_non_dict_raises_typeerror() -> None:
+    """Non-None, non-dict return is a programming error and raises."""
+    from app.services.projects import create_project
+
+    async def buggy_hook(session, **kwargs):  # noqa: ANN001 - test
+        return ["not", "a", "dict"]
+
+    ext.register_project_pre_create(buggy_hook)
+
+    session = _make_session()
+    with pytest.raises(TypeError, match="expected dict or None"):
+        await create_project(
+            session,
+            name="x",
             admin_chat_id=1,
             owner_user_id=uuid.uuid4(),
         )

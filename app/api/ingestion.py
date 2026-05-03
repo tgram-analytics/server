@@ -1,7 +1,9 @@
 """Event ingestion endpoints: POST /api/v1/track and POST /api/v1/pageview.
 
 Authentication: ``api_key`` field in the JSON request body.
-Rate limiting:  per-project sliding-window (configurable, default 100 req/s).
+Rate limiting:  per-project sliding-window. Limit is
+                ``project.rate_limit_per_second`` when set, else
+                ``Settings.rate_limit_per_second`` (default 100 req/s).
 Origin check:   project's domain_allowlist; empty list = allow all.
 """
 
@@ -169,14 +171,22 @@ async def _resolve_project(
     api_key: str,
     origin: str | None,
     session: AsyncSession,
-    rate_limit: int,
+    default_rate_limit: int,
 ) -> Project:
-    """Validate API key, rate limit, and origin. Returns the Project."""
+    """Validate API key, rate limit, and origin. Returns the Project.
+
+    The effective per-second rate limit is ``project.rate_limit_per_second``
+    when set, falling back to ``default_rate_limit`` (the global
+    ``Settings.rate_limit_per_second``) when the column is NULL. Cloud
+    overlays set the per-row override at project-create time so each
+    plan tier gets its own cap.
+    """
     project = await validate_api_key(api_key, session)
     if project is None:
         raise HTTPException(status_code=400, detail="Invalid API key")
 
-    if _is_rate_limited(project.id, rate_limit):
+    effective_limit = project.rate_limit_per_second or default_rate_limit
+    if _is_rate_limited(project.id, effective_limit):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     if not is_origin_allowed(project.domain_allowlist, origin):

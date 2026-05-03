@@ -40,21 +40,55 @@ async def create_project(
     :func:`app.extensions.register_project_pre_create` runs in
     registration order *after* the API key has been generated but
     *before* any DB write. A hook may raise to abort creation; the
-    exception propagates and no project row is inserted. OSS ships with
+    exception propagates and no project row is inserted. A hook may
+    also return a dict of column overrides (whitelisted via
+    :data:`app.extensions.PROJECT_OVERRIDABLE_FIELDS` and
+    :data:`app.extensions.PROJECT_SETTINGS_OVERRIDABLE_FIELDS`) to
+    apply to the new ``Project`` row and the auto-created
+    ``ProjectSettings`` row respectively; the merged dict is split by
+    target. Multiple hooks' dicts merge last-write-wins. OSS ships with
     zero hooks by default.
     """
-    from app.extensions import get_project_pre_create_hooks
+    import logging
+
+    from app.extensions import (
+        PROJECT_OVERRIDABLE_FIELDS,
+        PROJECT_SETTINGS_OVERRIDABLE_FIELDS,
+        get_project_pre_create_hooks,
+    )
+
+    log = logging.getLogger(__name__)
 
     api_key = generate_api_key()
 
     safe_allowlist = list(domain_allowlist or [])
+    project_overrides: dict[str, object] = {}
+    settings_overrides: dict[str, object] = {}
     for hook in get_project_pre_create_hooks():
-        await hook(
+        result = await hook(
             session,
             name=name,
             owner_user_id=owner_user_id,
             domain_allowlist=list(safe_allowlist),
         )
+        if result is None:
+            continue
+        if not isinstance(result, dict):
+            raise TypeError(
+                f"pre_create hook {hook!r} returned {type(result).__name__}; "
+                "expected dict or None"
+            )
+        for key, value in result.items():
+            if key in PROJECT_OVERRIDABLE_FIELDS:
+                project_overrides[key] = value
+            elif key in PROJECT_SETTINGS_OVERRIDABLE_FIELDS:
+                settings_overrides[key] = value
+            else:
+                log.warning(
+                    "pre_create hook %r returned non-whitelisted key %r — ignored",
+                    hook,
+                    key,
+                )
 
     project = Project(
         name=name,
@@ -62,12 +96,13 @@ async def create_project(
         admin_chat_id=admin_chat_id,
         owner_user_id=owner_user_id,
         domain_allowlist=safe_allowlist,
+        **project_overrides,
     )
     session.add(project)
     await session.flush()
 
     # Auto-create settings with defaults so every project always has a row.
-    settings = ProjectSettings(project_id=project.id)
+    settings = ProjectSettings(project_id=project.id, **settings_overrides)
     session.add(settings)
     await session.flush()
 

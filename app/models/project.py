@@ -41,6 +41,15 @@ class Project(Base):
         server_default=sa.text("ARRAY[]::text[]"),
         nullable=False,
     )
+    # Per-project ingestion rate limit (requests/sec). NULL = use the
+    # server-wide ``Settings.rate_limit_per_second`` default. Cloud
+    # overlays set this at create time so free-tier projects get a
+    # tighter cap than the OSS default; admins can override per project
+    # for VIP customers or for abusive accounts.
+    rate_limit_per_second: Mapped[int | None] = mapped_column(
+        sa.Integer,
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True),
         server_default=sa.text("now()"),

@@ -62,6 +62,13 @@ class ProjectPreCreate(Protocol):
     Receives all inputs to project creation and may raise to abort. Hooks
     must be pure-ish: side effects belong elsewhere, since a later hook
     raising will not roll back earlier hooks' side effects.
+
+    Return value: ``None`` (no overrides) or a ``dict[str, Any]`` of
+    column overrides to apply to the new ``Project`` row. Only a
+    whitelisted set of fields is honored — see
+    :data:`PROJECT_OVERRIDABLE_FIELDS`. Unknown keys are ignored with a
+    warning log. Multiple hooks' dicts are merged with last-write-wins
+    in registration order.
     """
 
     def __call__(
@@ -71,7 +78,18 @@ class ProjectPreCreate(Protocol):
         name: str,
         owner_user_id: Any,  # uuid.UUID — kept as Any to avoid an import cycle
         domain_allowlist: list[str],
-    ) -> Awaitable[None]: ...
+    ) -> Awaitable[dict[str, Any] | None]: ...
+
+
+# Whitelists of columns a pre-create hook may set via its return dict.
+# Kept narrow on purpose: this is not a general "let plugins write
+# arbitrary columns" door. Add new keys here only after deliberate
+# review. Entries in :data:`PROJECT_OVERRIDABLE_FIELDS` apply to the
+# ``Project`` row; entries in :data:`PROJECT_SETTINGS_OVERRIDABLE_FIELDS`
+# apply to the auto-created ``ProjectSettings`` row. The two sets must
+# stay disjoint so a single hook return value can be split unambiguously.
+PROJECT_OVERRIDABLE_FIELDS: frozenset[str] = frozenset({"rate_limit_per_second"})
+PROJECT_SETTINGS_OVERRIDABLE_FIELDS: frozenset[str] = frozenset({"retention_days"})
 
 
 _user_resolver: UserResolver | None = None
