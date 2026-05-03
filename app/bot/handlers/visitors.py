@@ -17,8 +17,12 @@ from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, 
 from app.bot.constants import PERIOD_LABEL, PERIODS
 from app.core.config import get_settings
 from app.core.database import get_session_factory
-from app.services.analytics import top_properties
-from app.services.charts import ChartGenerationError, generate_bar_chart
+from app.services.analytics import events_over_time, top_properties
+from app.services.charts import (
+    ChartGenerationError,
+    generate_bar_chart,
+    generate_line_chart,
+)
 from app.services.projects import get_project
 
 # ── Dimension config ──────────────────────────────────────────────────────────
@@ -45,17 +49,26 @@ def _visitors_keyboard(project_id_str: str, period: str) -> InlineKeyboardMarkup
         )
         for p in PERIODS
     ]
-    chart_row = [
+    line_row = [
         InlineKeyboardButton(
-            f"📊 {label}",
+            "📈 Visits over time",
+            callback_data=f"vis_line:{project_id_str}:{period}",
+        )
+    ]
+    dim_buttons = [
+        InlineKeyboardButton(
+            f"{emoji} {label}",
             callback_data=f"vis_chart:{project_id_str}:{key}:{period}",
         )
-        for key, _emoji, label in _DIMENSIONS
+        for key, emoji, label in _DIMENSIONS
     ]
+    # Two rows of two so labels don't get truncated on mobile.
+    dim_rows = [dim_buttons[:2], dim_buttons[2:]]
     return InlineKeyboardMarkup(
         [
             period_row,
-            chart_row,
+            line_row,
+            *dim_rows,
             [InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")],
         ]
     )
@@ -219,5 +232,75 @@ async def send_visitors_chart(
     await query.message.reply_photo(
         photo=png_bytes,
         caption=f"👥 {project.name} · {dim_label} · {period_label}",
+        reply_markup=back_keyboard,
+    )
+
+
+async def send_visitors_line_chart(
+    query: CallbackQuery,
+    project_id_str: str,
+    owner_user_id: uuid.UUID,
+    period: str,
+) -> None:
+    """Send a time-series line chart of pageviews for the period."""
+    assert isinstance(query.message, Message)
+
+    pid = uuid.UUID(project_id_str)
+    now = datetime.now(UTC)
+    delta = PERIODS.get(period, PERIODS["7d"])
+    start = now - delta
+    period_label = PERIOD_LABEL.get(period, period)
+    gran = "week" if period == "90d" else "day"
+    settings = get_settings()
+
+    factory = get_session_factory()
+    async with factory() as session:
+        project = await get_project(session, pid, owner_user_id)
+        if project is None:
+            await query.answer("❌ Project not found.", show_alert=True)
+            return
+
+        data = await events_over_time(
+            session,
+            project_id=pid,
+            event_name="pageview",
+            start=start,
+            end=now,
+            granularity=gran,
+        )
+
+    back_keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "« Back to visitors", callback_data=f"vis_prd:{project_id_str}:{period}"
+                )
+            ]
+        ]
+    )
+
+    if not data:
+        await query.answer(f"No visits for {period_label}.", show_alert=True)
+        return
+
+    try:
+        png_bytes = await generate_line_chart(
+            data,
+            title="Visits",
+            period_label=period_label,
+            quickchart_url=settings.quickchart_url,
+        )
+    except ChartGenerationError:
+        await query.answer("⚠️ Chart service unavailable.", show_alert=True)
+        return
+
+    await query.edit_message_text(
+        f"📈 <b>Visits</b> — {period_label}  ↓",
+        parse_mode="HTML",
+        reply_markup=back_keyboard,
+    )
+    await query.message.reply_photo(
+        photo=png_bytes,
+        caption=f"👥 {project.name} · Visits · {period_label}",
         reply_markup=back_keyboard,
     )

@@ -30,6 +30,7 @@ from app.bot.handlers.settings import (
 )
 from app.bot.handlers.visitors import (
     send_visitors_chart,
+    send_visitors_line_chart,
     show_visitors_menu,
     update_visitors_period,
 )
@@ -224,6 +225,12 @@ async def project_callback(
             await send_visitors_chart(
                 query, parts[0], owner_user_id, dimension=parts[1], period=parts[2]
             )
+
+    elif data.startswith("vis_line:"):
+        # vis_line:{project_id}:{period}
+        parts = data[9:].rsplit(":", 1)
+        if len(parts) == 2:
+            await send_visitors_line_chart(query, parts[0], owner_user_id, period=parts[1])
 
     elif data.startswith("menu:settings:"):
         project_id_str = data[14:]
