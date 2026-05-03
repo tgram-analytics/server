@@ -13,7 +13,7 @@ from __future__ import annotations
 import functools
 import logging
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
@@ -92,9 +92,13 @@ async def get_current_user(session: AsyncSession, update: Update) -> User | None
 # Type alias for a PTB handler that has been augmented with ``user`` and
 # ``session`` keyword arguments by ``@requires_user``.
 _AuthedHandler = Callable[..., Awaitable[Any]]
+# Plain PTB-shaped callback returned by the decorator (after auth/session
+# injection has been peeled off). Matches what CommandHandler /
+# CallbackQueryHandler / MessageHandler accept.
+_PtbHandler = Callable[["Update", "ContextTypes.DEFAULT_TYPE"], Coroutine[Any, Any, Any]]
 
 
-def requires_user(handler: _AuthedHandler) -> _AuthedHandler:
+def requires_user(handler: _AuthedHandler) -> _PtbHandler:
     """Decorator that resolves the current ``User`` and injects it.
 
     Wraps a python-telegram-bot handler whose signature is::

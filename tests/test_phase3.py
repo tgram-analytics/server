@@ -16,10 +16,20 @@ def test_is_origin_allowed_empty_allowlist_accepts_all():
     assert is_origin_allowed([], "https://anything.com") is True
 
 
-def test_is_origin_allowed_rejects_missing_origin():
+def test_is_origin_allowed_accepts_missing_origin_for_server_to_server():
+    """No Origin header → server-to-server caller, accept (allowlist guards
+    only browser traffic; backend SDKs are authenticated by api key alone)."""
     from app.services.events import is_origin_allowed
 
-    assert is_origin_allowed(["myapp.com"], None) is False
+    assert is_origin_allowed(["myapp.com"], None) is True
+
+
+def test_is_origin_allowed_rejects_null_origin():
+    """``Origin: null`` (sandboxed iframe / file://) is rejected when an
+    allowlist is configured — distinct from a missing header."""
+    from app.services.events import is_origin_allowed
+
+    assert is_origin_allowed(["myapp.com"], "null") is False
 
 
 def test_is_origin_allowed_accepts_matching_host():

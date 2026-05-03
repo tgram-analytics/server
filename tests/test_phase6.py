@@ -130,8 +130,10 @@ async def test_add_creates_project_and_shows_api_key(db_session, singleton_user)
         mock_settings.return_value.webhook_base_url = "https://example.com"
         await add_command(update, ctx)
 
-    update.message.reply_text.assert_called_once()
-    reply_text = update.message.reply_text.call_args[0][0]
+    # /add now sends two messages: the success/API-key reply, then the
+    # domain-allowlist onboarding prompt.
+    assert update.message.reply_text.call_count == 2
+    reply_text = update.message.reply_text.call_args_list[0][0][0]
     assert unique_name in reply_text
     assert "proj_" in reply_text  # api key shown once
 
