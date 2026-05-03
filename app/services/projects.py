@@ -75,8 +75,7 @@ async def create_project(
             continue
         if not isinstance(result, dict):
             raise TypeError(
-                f"pre_create hook {hook!r} returned {type(result).__name__}; "
-                "expected dict or None"
+                f"pre_create hook {hook!r} returned {type(result).__name__}; expected dict or None"
             )
         for key, value in result.items():
             if key in PROJECT_OVERRIDABLE_FIELDS:

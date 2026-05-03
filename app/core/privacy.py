@@ -20,7 +20,7 @@ import re
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from ua_parser import user_agent_parser
 
@@ -80,7 +80,7 @@ async def get_today_salt() -> str:
 
     existing = await client.get(key)
     if existing is not None:
-        return existing
+        return cast(str, existing)
 
     candidate = secrets.token_hex(_SALT_BYTES)
     # Atomic insert-if-absent; we don't trust the bool return — we always
@@ -91,7 +91,7 @@ async def get_today_salt() -> str:
         # Defensive: the key was evicted between SET and GET. Fall back to
         # our candidate; the next caller will re-populate.
         return candidate
-    return winner
+    return cast(str, winner)
 
 
 # ── Visitor hashing ────────────────────────────────────────────────────────
@@ -174,7 +174,7 @@ def parse_user_agent(ua: str) -> tuple[str, str, str]:
     if not ua:
         return (_UNKNOWN, _UNKNOWN, "unknown")
 
-    parsed = user_agent_parser.Parse(ua)
+    parsed = user_agent_parser.Parse(ua)  # type: ignore[no-untyped-call]
     ua_part = parsed.get("user_agent") or {}
     os_part = parsed.get("os") or {}
     device_part = parsed.get("device") or {}

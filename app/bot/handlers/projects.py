@@ -104,11 +104,6 @@ async def add_command(
         update.message, project_id_str=str(project.id), project_name=name
     )
 
-    # Immediately prompt for the domain allowlist for this fresh project.
-    await prompt_allowlist_after_create(
-        update.message, project_id_str=str(project.id), project_name=name
-    )
-
 
 # ── /projects ─────────────────────────────────────────────────────────────────
 

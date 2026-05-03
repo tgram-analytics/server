@@ -49,8 +49,8 @@ async def test_no_hooks_registered_creates_normally() -> None:
     """Default OSS path: zero hooks, behavior unchanged.
 
     We verify the hook loop is a no-op by registering nothing and
-    asserting ``session.add`` is called with both the Project and the
-    ProjectSettings row, in that order, followed by two flushes.
+    asserting ``session.add`` is called with the Project, the
+    ProjectSettings row, and the audit-log entry, in that order.
     """
     from app.services.projects import create_project
 
@@ -62,10 +62,11 @@ async def test_no_hooks_registered_creates_normally() -> None:
         owner_user_id=uuid.uuid4(),
     )
 
-    # Two add() calls (Project, then ProjectSettings) and two flushes.
-    assert session.add.call_count == 2
-    assert session.flush.await_count == 2
-    assert session.refresh.await_count == 1
+    # Three add() calls (Project, ProjectSettings, audit row); the audit
+    # writer also flushes and refreshes.
+    assert session.add.call_count == 3
+    assert session.flush.await_count == 3
+    assert session.refresh.await_count == 2
     assert api_key.startswith("proj_")
     assert project is not None
 

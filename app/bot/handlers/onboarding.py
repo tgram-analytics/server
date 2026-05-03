@@ -18,7 +18,13 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
+from telegram import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    Update,
+)
 from telegram.ext import ContextTypes
 
 from app.bot.auth import requires_user
@@ -192,7 +198,9 @@ async def onboarding_callback(
 # ── Internal handlers ─────────────────────────────────────────────────────────
 
 
-async def _send_test_event(query, session: AsyncSession, user: User, project_id: uuid.UUID) -> None:
+async def _send_test_event(
+    query: CallbackQuery, session: AsyncSession, user: User, project_id: uuid.UUID
+) -> None:
     project = await get_project(session, project_id, user.id)
     if project is None:
         await query.edit_message_text("❌ Project not found or no longer yours.")
@@ -226,7 +234,11 @@ async def _send_test_event(query, session: AsyncSession, user: User, project_id:
 
 
 async def _show_sdk(
-    query, session: AsyncSession, user: User, project_id: uuid.UUID, lang: str
+    query: CallbackQuery,
+    session: AsyncSession,
+    user: User,
+    project_id: uuid.UUID,
+    lang: str,
 ) -> None:
     project = await get_project(session, project_id, user.id)
     if project is None:

@@ -338,9 +338,9 @@ def test_migration_0005_enforces_not_null(db_url: str) -> None:
         )
         assert result.returncode != 0, "upgrade must fail when NULLs remain"
         combined = result.stdout + result.stderr
-        assert (
-            "owner_user_id has NULLs" in combined
-        ), f"expected RAISE EXCEPTION text in alembic output; got:\n{combined}"
+        assert "owner_user_id has NULLs" in combined, (
+            f"expected RAISE EXCEPTION text in alembic output; got:\n{combined}"
+        )
 
         # Clean up the orphan and retry — should succeed.
         _cleanup()

@@ -54,7 +54,19 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     for extra in get_bot_filters():
         admin_filter = admin_filter & extra
 
-    app = ApplicationBuilder().token(token).updater(None).build()
+    # Defaults (5s read/write) are too tight for media uploads like
+    # edit_message_media on busy/slow networks — bump them so chart photo
+    # edits don't surface as telegram.error.TimedOut.
+    app = (
+        ApplicationBuilder()
+        .token(token)
+        .updater(None)
+        .connect_timeout(10.0)
+        .read_timeout(20.0)
+        .write_timeout(20.0)
+        .media_write_timeout(60.0)
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", start_command, filters=admin_filter))
     app.add_handler(CommandHandler("help", help_command, filters=admin_filter))
