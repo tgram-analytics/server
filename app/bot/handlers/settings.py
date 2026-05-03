@@ -1,4 +1,4 @@
-"""Settings handler: retention period and domain allowlist management."""
+"""Settings handler: retention period, domain allowlist, and API key management."""
 
 from __future__ import annotations
 
@@ -11,9 +11,11 @@ from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, 
 
 from app.bot.states import BotStateService
 from app.core.database import get_session_factory
+from app.core.security import generate_api_key, hash_api_key
 from app.models.bot_conversation_state import BotConversationState
 from app.models.project import Project
 from app.models.settings import ProjectSettings
+from app.services.audit import write_audit
 from app.services.projects import get_project
 
 # ── Menu display ──────────────────────────────────────────────────────────────
@@ -54,6 +56,11 @@ async def show_settings_menu(
             [
                 InlineKeyboardButton("✏️ Retention", callback_data=f"set_ret:{project_id_str}"),
                 InlineKeyboardButton("🌐 Allowlist", callback_data=f"set_dom:{project_id_str}"),
+            ],
+            [
+                InlineKeyboardButton(
+                    "🔑 Recreate API key", callback_data=f"key_ask:{project_id_str}"
+                ),
             ],
             [InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")],
         ]
@@ -306,3 +313,93 @@ async def handle_set_allowlist_text(
     else:
         msg = "✅ Allowlist cleared — all origins allowed."
     await update.message.reply_text(msg, parse_mode="HTML")
+
+
+# ── API key rotation ──────────────────────────────────────────────────────────
+
+
+async def ask_recreate_api_key(
+    query: CallbackQuery, project_id_str: str, owner_user_id: uuid.UUID
+) -> None:
+    """Prompt the user to confirm rotating the project's API key."""
+    try:
+        pid = uuid.UUID(project_id_str)
+    except ValueError:
+        await query.edit_message_text("❌ Invalid project reference.")
+        return
+
+    factory = get_session_factory()
+    async with factory() as session:
+        project = await get_project(session, pid, owner_user_id)
+        if project is None:
+            await query.edit_message_text("❌ Project not found.")
+            return
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ Yes, recreate", callback_data=f"key_yes:{project_id_str}"),
+                InlineKeyboardButton("❌ Cancel", callback_data=f"menu:settings:{project_id_str}"),
+            ]
+        ]
+    )
+    await query.edit_message_text(
+        "⚠️ <b>Recreate API key?</b>\n\n"
+        "The current key will stop working <b>immediately</b>. "
+        "You'll need to update every SDK / integration with the new key.\n\n"
+        "This cannot be undone.",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+
+
+async def confirm_recreate_api_key(
+    query: CallbackQuery, project_id_str: str, owner_user_id: uuid.UUID
+) -> None:
+    """Generate and persist a new API key for the project, then reveal it once."""
+    try:
+        pid = uuid.UUID(project_id_str)
+    except ValueError:
+        await query.edit_message_text("❌ Invalid project reference.")
+        return
+
+    factory = get_session_factory()
+    async with factory() as session:
+        project = await get_project(session, pid, owner_user_id)
+        if project is None:
+            await query.edit_message_text("❌ Project not found.")
+            return
+
+        new_key = generate_api_key()
+        project.api_key_hash = hash_api_key(new_key)
+        await write_audit(
+            session,
+            user_id=owner_user_id,
+            action="project.api_key.rotate",
+            target_type="project",
+            target_id=str(project.id),
+            metadata={"name": project.name},
+        )
+        await session.commit()
+
+    from app.core.config import get_settings
+
+    base = get_settings().webhook_base_url.rstrip("/") or "https://your-server.com"
+    env_block = f"TGA_URL={base}\nTGA_API_KEY={new_key}"
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "« Back to settings", callback_data=f"menu:settings:{project_id_str}"
+                )
+            ]
+        ]
+    )
+    await query.edit_message_text(
+        "🔑 <b>New API key generated.</b>\n\n"
+        "⚠️ Save it now — it won't be shown again.\n\n"
+        f"<b>Env:</b>\n<tg-spoiler><pre>{env_block}</pre></tg-spoiler>",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )

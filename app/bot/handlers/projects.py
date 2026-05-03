@@ -22,6 +22,8 @@ from app.bot.handlers.reports import (
     update_report_chart,
 )
 from app.bot.handlers.settings import (
+    ask_recreate_api_key,
+    confirm_recreate_api_key,
     handle_allow_all,
     prompt_allowlist_after_create,
     show_settings_menu,
@@ -247,6 +249,14 @@ async def project_callback(
     elif data.startswith("allow_all:"):
         project_id_str = data[10:]
         await handle_allow_all(query, project_id_str, owner_user_id)
+
+    elif data.startswith("key_ask:"):
+        project_id_str = data[8:]
+        await ask_recreate_api_key(query, project_id_str, owner_user_id)
+
+    elif data.startswith("key_yes:"):
+        project_id_str = data[8:]
+        await confirm_recreate_api_key(query, project_id_str, owner_user_id)
 
     elif data.startswith("menu:"):
         parts = data.split(":", 2)
