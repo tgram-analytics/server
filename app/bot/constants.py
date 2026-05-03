@@ -43,5 +43,7 @@ async def escape_photo(query: CallbackQuery) -> CallbackQuery:
     chat_id = query.message.chat_id
     await query.message.delete()
     placeholder = await query.get_bot().send_message(chat_id, "\u23f3")
-    query._message = placeholder  # noqa: SLF001
+    query._unfreeze()  # noqa: SLF001
+    query.message = placeholder
+    query._freeze()  # noqa: SLF001
     return query
