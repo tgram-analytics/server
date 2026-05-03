@@ -5,19 +5,21 @@ from __future__ import annotations
 import html
 import uuid
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.ext import ContextTypes
 
+from app.bot.auth import requires_user
 from app.bot.states import BotStateService
-from app.core.config import get_settings
 from app.core.database import get_session_factory
 from app.models.alert import Alert, AlertCondition
+from app.models.user import User
 from app.services.alerts import (
     create_alert,
     delete_alert,
     disable_alert,
+    get_active_alerts_across_projects,
     get_alert,
-    list_active_alerts_for_admin,
     list_alerts,
     mute_alert,
     toggle_alert,
@@ -36,11 +38,13 @@ def _format_alert_label(alert: Alert) -> str:
         return f"{status} {alert.event_name} (>{alert.threshold_n}/day)"
 
 
-async def show_alerts_menu(query: CallbackQuery, project_id_str: str, admin_chat_id: int) -> None:
+async def show_alerts_menu(
+    query: CallbackQuery, project_id_str: str, owner_user_id: uuid.UUID
+) -> None:
     """Display the alerts list for a project with action buttons."""
     factory = get_session_factory()
     async with factory() as session:
-        project = await get_project(session, uuid.UUID(project_id_str), admin_chat_id)
+        project = await get_project(session, uuid.UUID(project_id_str), owner_user_id)
         if project is None:
             await query.edit_message_text("❌ Project not found.")
             return
@@ -76,16 +80,18 @@ async def show_alerts_menu(query: CallbackQuery, project_id_str: str, admin_chat
     )
 
 
-async def alerts_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+@requires_user
+async def alerts_command(
+    update: Update,
+    ctx: ContextTypes.DEFAULT_TYPE,
+    *,
+    user: User,
+    session: AsyncSession,
+) -> None:
     """Handle /alerts — list all active alerts across all projects."""
     assert update.message is not None
 
-    settings = get_settings()
-    admin_chat_id = settings.admin_chat_id
-
-    factory = get_session_factory()
-    async with factory() as session:
-        rows = await list_active_alerts_for_admin(session, admin_chat_id)
+    rows = await get_active_alerts_across_projects(session, user.id)
 
     if not rows:
         await update.message.reply_text("No active alerts.", parse_mode="HTML")
@@ -115,18 +121,20 @@ async def alerts_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 
-async def alert_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+@requires_user
+async def alert_callback(
+    update: Update,
+    ctx: ContextTypes.DEFAULT_TYPE,
+    *,
+    user: User,
+    session: AsyncSession,
+) -> None:
     """Handle all alert-related callbacks."""
     query = update.callback_query
     assert query is not None
     await query.answer()
 
-    settings = get_settings()
-    admin_chat_id = settings.admin_chat_id
-
-    if update.effective_user is None or update.effective_user.id != admin_chat_id:
-        return
-
+    owner_user_id = user.id
     data: str = query.data or ""
 
     if data.startswith("alert_add:"):
@@ -135,34 +143,34 @@ async def alert_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
 
     elif data.startswith("alert_cond:"):
         condition = data[11:]
-        await _handle_condition_choice(query, condition, admin_chat_id)
+        await _handle_condition_choice(query, condition, owner_user_id)
 
     elif data.startswith("alert_d:"):
         alert_id_str = data[8:]
-        await _delete_alert(query, alert_id_str, admin_chat_id)
+        await _delete_alert(query, alert_id_str, owner_user_id)
 
     elif data.startswith("alert_t:"):
         alert_id_str = data[8:]
-        await _toggle_alert(query, alert_id_str, admin_chat_id)
+        await _toggle_alert(query, alert_id_str, owner_user_id)
 
     elif data.startswith("alert_sil:"):
         rest = data[10:]  # "{alert_id}" or "{alert_id}:{hours}"
         if ":" in rest:
             alert_id_str, hours_str = rest.split(":", 1)
-            await _apply_silence(query, alert_id_str, int(hours_str))
+            await _apply_silence(query, alert_id_str, int(hours_str), owner_user_id)
         else:
             await _show_silence_picker(query, rest)
 
     elif data.startswith("alert_dis:"):
         alert_id_str = data[10:]
-        await _disable_alert_from_notification(query, alert_id_str)
+        await _disable_alert_from_notification(query, alert_id_str, owner_user_id)
 
     elif data == "alert_noop":
         pass
 
     elif data.startswith("back:alerts:"):
         project_id_str = data[12:]
-        await show_alerts_menu(query, project_id_str, admin_chat_id)
+        await show_alerts_menu(query, project_id_str, owner_user_id)
 
 
 async def _start_add_alert(query: CallbackQuery, project_id_str: str) -> None:
@@ -190,7 +198,7 @@ async def _start_add_alert(query: CallbackQuery, project_id_str: str) -> None:
 
 
 async def _handle_condition_choice(
-    query: CallbackQuery, condition: str, admin_chat_id: int
+    query: CallbackQuery, condition: str, owner_user_id: uuid.UUID
 ) -> None:
     """Handle condition button click during add-alert flow."""
     assert isinstance(query.message, Message)
@@ -262,7 +270,7 @@ async def _handle_condition_choice(
             )
 
 
-async def _delete_alert(query: CallbackQuery, alert_id_str: str, admin_chat_id: int) -> None:
+async def _delete_alert(query: CallbackQuery, alert_id_str: str, owner_user_id: uuid.UUID) -> None:
     """Delete an alert and refresh the list."""
     factory = get_session_factory()
     async with factory() as session:
@@ -271,7 +279,7 @@ async def _delete_alert(query: CallbackQuery, alert_id_str: str, admin_chat_id: 
             await query.edit_message_text("❌ Alert not found.")
             return
 
-        project = await get_project(session, alert.project_id, admin_chat_id)
+        project = await get_project(session, alert.project_id, owner_user_id)
         if project is None:
             await query.edit_message_text("❌ Alert not found.")
             return
@@ -280,10 +288,10 @@ async def _delete_alert(query: CallbackQuery, alert_id_str: str, admin_chat_id: 
         await delete_alert(session, alert.id, alert.project_id)
         await session.commit()
 
-    await show_alerts_menu(query, project_id_str, admin_chat_id)
+    await show_alerts_menu(query, project_id_str, owner_user_id)
 
 
-async def _toggle_alert(query: CallbackQuery, alert_id_str: str, admin_chat_id: int) -> None:
+async def _toggle_alert(query: CallbackQuery, alert_id_str: str, owner_user_id: uuid.UUID) -> None:
     """Toggle an alert's active status and refresh the list."""
     factory = get_session_factory()
     async with factory() as session:
@@ -292,7 +300,7 @@ async def _toggle_alert(query: CallbackQuery, alert_id_str: str, admin_chat_id: 
             await query.edit_message_text("❌ Alert not found.")
             return
 
-        project = await get_project(session, alert.project_id, admin_chat_id)
+        project = await get_project(session, alert.project_id, owner_user_id)
         if project is None:
             await query.edit_message_text("❌ Alert not found.")
             return
@@ -301,148 +309,143 @@ async def _toggle_alert(query: CallbackQuery, alert_id_str: str, admin_chat_id: 
         await toggle_alert(session, alert.id, alert.project_id)
         await session.commit()
 
-    await show_alerts_menu(query, project_id_str, admin_chat_id)
+    await show_alerts_menu(query, project_id_str, owner_user_id)
 
 
-async def handle_text_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+@requires_user
+async def handle_text_message(
+    update: Update,
+    ctx: ContextTypes.DEFAULT_TYPE,
+    *,
+    user: User,
+    session: AsyncSession,
+) -> None:
     """Handle text messages for multi-step conversation flows."""
     assert update.message is not None
     assert update.effective_chat is not None
 
-    settings = get_settings()
-    admin_chat_id = settings.admin_chat_id
-
-    if update.effective_user is None or update.effective_user.id != admin_chat_id:
-        return
-
     chat_id = update.effective_chat.id
     text = update.message.text or ""
 
-    factory = get_session_factory()
-    async with factory() as session:
-        svc = BotStateService(session)
-        state = await svc.get(chat_id)
+    svc = BotStateService(session)
+    state = await svc.get(chat_id)
 
-        if state is None:
+    if state is None:
+        return
+
+    # Dispatch to the appropriate conversation flow handler
+    if state.flow in ("set_retention", "set_allowlist"):
+        from app.bot.handlers.settings import (
+            handle_set_allowlist_text,
+            handle_set_retention_text,
+        )
+
+        if state.flow == "set_retention":
+            await handle_set_retention_text(update, session, svc, state)
+        else:
+            await handle_set_allowlist_text(update, session, svc, state)
+        return
+
+    if state.flow == "add_funnel":
+        from app.bot.handlers.funnels import handle_funnel_text
+
+        await handle_funnel_text(update, ctx)
+        return
+
+    if state.flow != "add_alert":
+        return
+
+    payload = state.payload or {}
+
+    if state.step == "event_name":
+        event_name = text.strip()
+        if not event_name:
+            await update.message.reply_text("❌ Event name cannot be empty. Try again:")
             return
 
-        # Dispatch to the appropriate conversation flow handler
-        if state.flow in ("set_retention", "set_allowlist"):
-            from app.bot.handlers.settings import (
-                handle_set_allowlist_text,
-                handle_set_retention_text,
-            )
+        payload["event_name"] = event_name
+        await svc.save(
+            chat_id,
+            flow="add_alert",
+            step="condition",
+            payload=payload,
+        )
 
-            if state.flow == "set_retention":
-                await handle_set_retention_text(update, session, svc, state)
-            else:
-                await handle_set_allowlist_text(update, session, svc, state)
-            await session.commit()
-            return
-
-        if state.flow == "add_funnel":
-            from app.bot.handlers.funnels import handle_funnel_text
-
-            await handle_funnel_text(update, ctx)
-            return
-
-        if state.flow != "add_alert":
-            return
-
-        payload = state.payload or {}
-
-        if state.step == "event_name":
-            event_name = text.strip()
-            if not event_name:
-                await update.message.reply_text("❌ Event name cannot be empty. Try again:")
-                return
-
-            payload["event_name"] = event_name
-            await svc.save(
-                chat_id,
-                flow="add_alert",
-                step="condition",
-                payload=payload,
-            )
-            await session.commit()
-
-            keyboard = InlineKeyboardMarkup(
+        keyboard = InlineKeyboardMarkup(
+            [
                 [
-                    [
-                        InlineKeyboardButton("Every", callback_data="alert_cond:every"),
-                        InlineKeyboardButton("Every N", callback_data="alert_cond:every_n"),
-                        InlineKeyboardButton("Threshold", callback_data="alert_cond:threshold"),
-                    ]
+                    InlineKeyboardButton("Every", callback_data="alert_cond:every"),
+                    InlineKeyboardButton("Every N", callback_data="alert_cond:every_n"),
+                    InlineKeyboardButton("Threshold", callback_data="alert_cond:threshold"),
                 ]
-            )
-            await update.message.reply_text(
-                f"📝 <b>Add Alert</b>\n\n"
-                f"Event: <b>{html.escape(event_name)}</b>\n\n"
-                f"Choose when to notify:\n"
-                f"• <b>Every</b> — on every occurrence\n"
-                f"• <b>Every N</b> — every Nth occurrence\n"
-                f"• <b>Threshold</b> — when count exceeds N per day",
-                parse_mode="HTML",
-                reply_markup=keyboard,
-            )
+            ]
+        )
+        await update.message.reply_text(
+            f"📝 <b>Add Alert</b>\n\n"
+            f"Event: <b>{html.escape(event_name)}</b>\n\n"
+            f"Choose when to notify:\n"
+            f"• <b>Every</b> — on every occurrence\n"
+            f"• <b>Every N</b> — every Nth occurrence\n"
+            f"• <b>Threshold</b> — when count exceeds N per day",
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
 
-        elif state.step == "threshold_n":
-            try:
-                threshold_n = int(text.strip())
-                if threshold_n < 1:
-                    raise ValueError()
-            except ValueError:
-                await update.message.reply_text("❌ Please enter a positive integer:")
-                return
+    elif state.step == "threshold_n":
+        try:
+            threshold_n = int(text.strip())
+            if threshold_n < 1:
+                raise ValueError()
+        except ValueError:
+            await update.message.reply_text("❌ Please enter a positive integer:")
+            return
 
-            project_id_str = payload.get("project_id")
-            event_name_val: str | None = payload.get("event_name")
-            condition_str = payload.get("condition")
+        project_id_str = payload.get("project_id")
+        event_name_val: str | None = payload.get("event_name")
+        condition_str = payload.get("condition")
 
-            if not all([project_id_str, event_name_val, condition_str]):
-                await svc.clear(chat_id)
-                await session.commit()
-                await update.message.reply_text(
-                    "❌ Invalid state. Please start again from the Alerts menu."
-                )
-                return
-
-            assert project_id_str is not None
-            assert event_name_val is not None
-
-            condition = (
-                AlertCondition.every_n if condition_str == "every_n" else AlertCondition.threshold
-            )
-
-            await create_alert(
-                session,
-                project_id=uuid.UUID(project_id_str),
-                event_name=event_name_val,
-                condition=condition,
-                threshold_n=threshold_n,
-            )
+        if not all([project_id_str, event_name_val, condition_str]):
             await svc.clear(chat_id)
-            await session.commit()
-
-            if condition == AlertCondition.every_n:
-                desc = f"notify every <b>{threshold_n}</b> occurrences"
-            else:
-                desc = f"notify when exceeds <b>{threshold_n}</b>/day"
-
-            keyboard = InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "« Back to alerts", callback_data=f"back:alerts:{project_id_str}"
-                        )
-                    ]
-                ]
-            )
             await update.message.reply_text(
-                f"✅ Alert created!\n\nEvent: <b>{html.escape(event_name_val)}</b>\nCondition: {desc}",
-                parse_mode="HTML",
-                reply_markup=keyboard,
+                "❌ Invalid state. Please start again from the Alerts menu."
             )
+            return
+
+        assert project_id_str is not None
+        assert event_name_val is not None
+
+        condition = (
+            AlertCondition.every_n if condition_str == "every_n" else AlertCondition.threshold
+        )
+
+        await create_alert(
+            session,
+            project_id=uuid.UUID(project_id_str),
+            event_name=event_name_val,
+            condition=condition,
+            threshold_n=threshold_n,
+        )
+        await svc.clear(chat_id)
+
+        if condition == AlertCondition.every_n:
+            desc = f"notify every <b>{threshold_n}</b> occurrences"
+        else:
+            desc = f"notify when exceeds <b>{threshold_n}</b>/day"
+
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "« Back to alerts", callback_data=f"back:alerts:{project_id_str}"
+                    )
+                ]
+            ]
+        )
+        await update.message.reply_text(
+            f"✅ Alert created!\n\nEvent: <b>{html.escape(event_name_val)}</b>\nCondition: {desc}",
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
 
 
 async def _show_silence_picker(query: CallbackQuery, alert_id_str: str) -> None:
@@ -459,18 +462,18 @@ async def _show_silence_picker(query: CallbackQuery, alert_id_str: str) -> None:
     await query.edit_message_reply_markup(reply_markup=keyboard)
 
 
-async def _apply_silence(query: CallbackQuery, alert_id_str: str, hours: int) -> None:
+async def _apply_silence(
+    query: CallbackQuery, alert_id_str: str, hours: int, owner_user_id: uuid.UUID
+) -> None:
     """Apply a silence period to an alert and confirm in the message."""
-    settings = get_settings()
-    admin_chat_id = settings.admin_chat_id
     factory = get_session_factory()
     async with factory() as session:
         alert = await get_alert(session, uuid.UUID(alert_id_str))
         if alert is None:
             await query.answer("Alert not found.", show_alert=True)
             return
-        # Verify the alert belongs to a project owned by this admin.
-        project = await get_project(session, alert.project_id, admin_chat_id)
+        # Verify the alert belongs to a project owned by this user.
+        project = await get_project(session, alert.project_id, owner_user_id)
         if project is None:
             await query.answer("Alert not found.", show_alert=True)
             return
@@ -489,18 +492,18 @@ async def _apply_silence(query: CallbackQuery, alert_id_str: str, hours: int) ->
     await query.edit_message_reply_markup(reply_markup=None)
 
 
-async def _disable_alert_from_notification(query: CallbackQuery, alert_id_str: str) -> None:
+async def _disable_alert_from_notification(
+    query: CallbackQuery, alert_id_str: str, owner_user_id: uuid.UUID
+) -> None:
     """Disable an alert from a notification message button."""
-    settings = get_settings()
-    admin_chat_id = settings.admin_chat_id
     factory = get_session_factory()
     async with factory() as session:
         alert = await get_alert(session, uuid.UUID(alert_id_str))
         if alert is None:
             await query.answer("Alert not found.", show_alert=True)
             return
-        # Verify the alert belongs to a project owned by this admin.
-        project = await get_project(session, alert.project_id, admin_chat_id)
+        # Verify the alert belongs to a project owned by this user.
+        project = await get_project(session, alert.project_id, owner_user_id)
         if project is None:
             await query.answer("Alert not found.", show_alert=True)
             return

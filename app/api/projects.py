@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Security
 from fastapi.security import APIKeyHeader
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.auth import ensure_singleton_user
 from app.core.config import Settings, get_settings
 from app.core.database import get_session
 from app.schemas.project import ProjectCreate, ProjectResponse, ProjectWithKeyResponse
@@ -49,10 +50,12 @@ async def create_project_endpoint(
     plaintext key is shown — it is hashed before storage and cannot be
     retrieved again.
     """
+    user = await ensure_singleton_user(session, settings.admin_chat_id)
     project, api_key = await create_project(
         session,
         name=body.name,
         admin_chat_id=settings.admin_chat_id,
+        owner_user_id=user.id,
         domain_allowlist=body.domain_allowlist,
     )
     await session.commit()
@@ -76,7 +79,9 @@ async def list_projects_endpoint(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> list[ProjectResponse]:
-    projects = await list_projects(session, settings.admin_chat_id)
+    user = await ensure_singleton_user(session, settings.admin_chat_id)
+    await session.commit()
+    projects = await list_projects(session, user.id)
     return [ProjectResponse.model_validate(p) for p in projects]
 
 
@@ -91,7 +96,9 @@ async def get_project_endpoint(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> ProjectResponse:
-    project = await get_project(session, project_id, settings.admin_chat_id)
+    user = await ensure_singleton_user(session, settings.admin_chat_id)
+    await session.commit()
+    project = await get_project(session, project_id, user.id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return ProjectResponse.model_validate(project)
@@ -108,7 +115,8 @@ async def delete_project_endpoint(
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ) -> None:
-    deleted = await delete_project(session, project_id, settings.admin_chat_id)
+    user = await ensure_singleton_user(session, settings.admin_chat_id)
+    deleted = await delete_project(session, project_id, user.id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Project not found")
     await session.commit()

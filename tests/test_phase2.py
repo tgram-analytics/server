@@ -59,10 +59,15 @@ def test_hash_is_sha256_length() -> None:
 async def test_validate_api_key_returns_correct_project(db_session: AsyncSession) -> None:
     """validate_api_key(plaintext) returns the matching Project."""
     from app.core.security import validate_api_key
+    from app.models.user import User
     from app.services.projects import create_project
 
+    user = User(telegram_user_id=999_001)
+    db_session.add(user)
+    await db_session.flush()
+
     project, api_key = await create_project(
-        db_session, name="validate-test.com", admin_chat_id=999_001
+        db_session, name="validate-test.com", admin_chat_id=999_001, owner_user_id=user.id
     )
 
     found = await validate_api_key(api_key, db_session)

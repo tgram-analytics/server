@@ -1,7 +1,7 @@
 """Tests for the ⚙️ Settings bot handler."""
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 from telegram import Message
 
@@ -34,14 +34,17 @@ def _make_message(chat_id: int = ADMIN_ID, text: str = "30"):
 # ── show_settings_menu ────────────────────────────────────────────────────────
 
 
-async def test_show_settings_menu_defaults(db_session, session_factory):
+async def test_show_settings_menu_defaults(session_factory, singleton_user):
     """Settings menu shows default retention (90 days) and open allowlist."""
     from app.bot.handlers.settings import show_settings_menu
     from app.services.projects import create_project
 
     async with session_factory() as session:
         project, _ = await create_project(
-            session, name="settings-default.com", admin_chat_id=ADMIN_ID
+            session,
+            name="settings-default.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
         )
         await session.commit()
         pid = str(project.id)
@@ -49,8 +52,7 @@ async def test_show_settings_menu_defaults(db_session, session_factory):
     query = MagicMock()
     query.edit_message_text = AsyncMock()
 
-    with patch("app.bot.handlers.settings.get_session_factory", return_value=session_factory):
-        await show_settings_menu(query, pid, ADMIN_ID)
+    await show_settings_menu(query, pid, singleton_user.id)
 
     query.edit_message_text.assert_called_once()
     text = query.edit_message_text.call_args[0][0]
@@ -65,14 +67,13 @@ async def test_show_settings_menu_defaults(db_session, session_factory):
     assert any("Allowlist" in label for label in flat)
 
 
-async def test_show_settings_menu_project_not_found(db_session, session_factory):
+async def test_show_settings_menu_project_not_found(session_factory, singleton_user):
     from app.bot.handlers.settings import show_settings_menu
 
     query = MagicMock()
     query.edit_message_text = AsyncMock()
 
-    with patch("app.bot.handlers.settings.get_session_factory", return_value=session_factory):
-        await show_settings_menu(query, str(uuid.uuid4()), ADMIN_ID)
+    await show_settings_menu(query, str(uuid.uuid4()), singleton_user.id)
 
     text = query.edit_message_text.call_args[0][0]
     assert "not found" in text.lower()
@@ -81,13 +82,18 @@ async def test_show_settings_menu_project_not_found(db_session, session_factory)
 # ── set_retention flow ────────────────────────────────────────────────────────
 
 
-async def test_start_set_retention_saves_state(db_session, session_factory):
+async def test_start_set_retention_saves_state(session_factory, singleton_user):
     """Tapping ✏️ Retention saves flow state and shows prompt."""
     from app.bot.handlers.settings import start_set_retention
     from app.services.projects import create_project
 
     async with session_factory() as session:
-        project, _ = await create_project(session, name="ret-flow.com", admin_chat_id=ADMIN_ID)
+        project, _ = await create_project(
+            session,
+            name="ret-flow.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
         await session.commit()
         pid = str(project.id)
 
@@ -96,8 +102,7 @@ async def test_start_set_retention_saves_state(db_session, session_factory):
     query.message.chat_id = ADMIN_ID
     query.edit_message_text = AsyncMock()
 
-    with patch("app.bot.handlers.settings.get_session_factory", return_value=session_factory):
-        await start_set_retention(query, pid, ADMIN_ID)
+    await start_set_retention(query, pid, singleton_user.id)
 
     query.edit_message_text.assert_called_once()
     text = query.edit_message_text.call_args[0][0]
@@ -105,7 +110,7 @@ async def test_start_set_retention_saves_state(db_session, session_factory):
     assert "days" in text.lower()
 
 
-async def test_set_retention_updates_database(db_session, session_factory):
+async def test_set_retention_updates_database(session_factory, singleton_user):
     """Typing a valid number updates ProjectSettings.retention_days."""
     from sqlalchemy import select
 
@@ -115,7 +120,12 @@ async def test_set_retention_updates_database(db_session, session_factory):
     from app.services.projects import create_project
 
     async with session_factory() as session:
-        project, _ = await create_project(session, name="ret-update.com", admin_chat_id=ADMIN_ID)
+        project, _ = await create_project(
+            session,
+            name="ret-update.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
         await session.commit()
         pid = str(project.id)
 
@@ -124,13 +134,7 @@ async def test_set_retention_updates_database(db_session, session_factory):
         await session.commit()
 
     update, ctx = _make_message(chat_id=ADMIN_ID, text="30")
-
-    with (
-        patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory),
-        patch("app.bot.handlers.alerts.get_settings") as mock_settings,
-    ):
-        mock_settings.return_value.admin_chat_id = ADMIN_ID
-        await handle_text_message(update, ctx)
+    await handle_text_message(update, ctx)
 
     update.message.reply_text.assert_called_once()
     text = update.message.reply_text.call_args[0][0]
@@ -144,14 +148,19 @@ async def test_set_retention_updates_database(db_session, session_factory):
         assert ps.retention_days == 30
 
 
-async def test_set_retention_invalid_input(db_session, session_factory):
+async def test_set_retention_invalid_input(session_factory, singleton_user):
     """Non-numeric input shows error without updating DB."""
     from app.bot.handlers.alerts import handle_text_message
     from app.bot.states import BotStateService
     from app.services.projects import create_project
 
     async with session_factory() as session:
-        project, _ = await create_project(session, name="ret-invalid.com", admin_chat_id=ADMIN_ID)
+        project, _ = await create_project(
+            session,
+            name="ret-invalid.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
         await session.commit()
         pid = str(project.id)
 
@@ -160,19 +169,14 @@ async def test_set_retention_invalid_input(db_session, session_factory):
         await session.commit()
 
     update, ctx = _make_message(chat_id=ADMIN_ID, text="not-a-number")
+    await handle_text_message(update, ctx)
 
-    with (
-        patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory),
-        patch("app.bot.handlers.alerts.get_settings") as mock_settings,
-    ):
-        mock_settings.return_value.admin_chat_id = ADMIN_ID
-        await handle_text_message(update, ctx)
-
+    update.message.reply_text.assert_called_once()
     text = update.message.reply_text.call_args[0][0]
     assert "integer" in text.lower()
 
 
-async def test_set_retention_forever(db_session, session_factory):
+async def test_set_retention_forever(session_factory, singleton_user):
     """Entering 0 sets retention to 'forever'."""
     from sqlalchemy import select
 
@@ -182,7 +186,12 @@ async def test_set_retention_forever(db_session, session_factory):
     from app.services.projects import create_project
 
     async with session_factory() as session:
-        project, _ = await create_project(session, name="ret-forever.com", admin_chat_id=ADMIN_ID)
+        project, _ = await create_project(
+            session,
+            name="ret-forever.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
         await session.commit()
         pid = str(project.id)
 
@@ -191,13 +200,7 @@ async def test_set_retention_forever(db_session, session_factory):
         await session.commit()
 
     update, ctx = _make_message(chat_id=ADMIN_ID, text="0")
-
-    with (
-        patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory),
-        patch("app.bot.handlers.alerts.get_settings") as mock_settings,
-    ):
-        mock_settings.return_value.admin_chat_id = ADMIN_ID
-        await handle_text_message(update, ctx)
+    await handle_text_message(update, ctx)
 
     text = update.message.reply_text.call_args[0][0]
     assert "forever" in text.lower()
@@ -213,7 +216,7 @@ async def test_set_retention_forever(db_session, session_factory):
 # ── set_allowlist flow ────────────────────────────────────────────────────────
 
 
-async def test_set_allowlist_updates_project(db_session, session_factory):
+async def test_set_allowlist_updates_project(session_factory, singleton_user):
     """Typing domains updates project.domain_allowlist."""
     from sqlalchemy import select
 
@@ -223,7 +226,12 @@ async def test_set_allowlist_updates_project(db_session, session_factory):
     from app.services.projects import create_project
 
     async with session_factory() as session:
-        project, _ = await create_project(session, name="allow-update.com", admin_chat_id=ADMIN_ID)
+        project, _ = await create_project(
+            session,
+            name="allow-update.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
         await session.commit()
         pid = str(project.id)
 
@@ -232,13 +240,7 @@ async def test_set_allowlist_updates_project(db_session, session_factory):
         await session.commit()
 
     update, ctx = _make_message(chat_id=ADMIN_ID, text="myapp.com, api.myapp.com")
-
-    with (
-        patch("app.bot.handlers.alerts.get_session_factory", return_value=session_factory),
-        patch("app.bot.handlers.alerts.get_settings") as mock_settings,
-    ):
-        mock_settings.return_value.admin_chat_id = ADMIN_ID
-        await handle_text_message(update, ctx)
+    await handle_text_message(update, ctx)
 
     text = update.message.reply_text.call_args[0][0]
     assert "myapp.com" in text
@@ -250,7 +252,7 @@ async def test_set_allowlist_updates_project(db_session, session_factory):
         assert "api.myapp.com" in p.domain_allowlist
 
 
-async def test_allow_all_button_clears_allowlist(db_session, session_factory):
+async def test_allow_all_button_clears_allowlist(session_factory, singleton_user):
     """Pressing 'Allow all' button clears the allowlist."""
     from sqlalchemy import select
     from sqlalchemy import update as sql_update
@@ -260,7 +262,12 @@ async def test_allow_all_button_clears_allowlist(db_session, session_factory):
     from app.services.projects import create_project
 
     async with session_factory() as session:
-        project, _ = await create_project(session, name="allow-clear.com", admin_chat_id=ADMIN_ID)
+        project, _ = await create_project(
+            session,
+            name="allow-clear.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
         await session.commit()
         pid = str(project.id)
         # Pre-set an allowlist
@@ -274,8 +281,7 @@ async def test_allow_all_button_clears_allowlist(db_session, session_factory):
     query.message.chat_id = ADMIN_ID
     query.edit_message_text = AsyncMock()
 
-    with patch("app.bot.handlers.settings.get_session_factory", return_value=session_factory):
-        await handle_allow_all(query, pid, ADMIN_ID)
+    await handle_allow_all(query, pid, singleton_user.id)
 
     query.edit_message_text.assert_called_once()
     text = query.edit_message_text.call_args[0][0]

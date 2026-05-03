@@ -23,6 +23,8 @@ class Event(Base):
         sa.Index("ix_events_project_event_ts", "project_id", "event_name", "timestamp"),
         # Used for session-based deduplication.
         sa.Index("ix_events_session_id", "session_id"),
+        # Phase 4.2: unique-visitor counts within a project + day.
+        sa.Index("ix_events_visitor_hash_project", "project_id", "visitor_hash"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -58,3 +60,10 @@ class Event(Base):
         server_default=sa.text("now()"),
         nullable=False,
     )
+    # Phase 4.2: privacy-preserving visitor identifier (daily-rotating
+    # SHA-256 truncation of salt + project + IP + UA). NULL on pre-4.2 rows.
+    visitor_hash: Mapped[str | None] = mapped_column(sa.String(16), nullable=True)
+    # Phase 4.2: parsed UA fields. We never persist the raw UA string.
+    browser: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+    os: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+    device_type: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)

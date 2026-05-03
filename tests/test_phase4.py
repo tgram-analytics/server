@@ -7,15 +7,27 @@ from datetime import UTC, datetime, timedelta
 
 
 async def _seed_project(db_session) -> uuid.UUID:
-    """Insert a Project row (+ default ProjectSettings) and return its id."""
+    """Insert a Project row (+ default ProjectSettings) and return its id.
+
+    Also seeds a parent ``users`` row because ``projects.owner_user_id`` is
+    NOT NULL after migration 0005.
+    """
     from app.core.security import generate_api_key, hash_api_key
     from app.models.project import Project
     from app.models.settings import ProjectSettings
+    from app.models.user import User
+
+    # Use a unique telegram_user_id per call so multi-project tests don't
+    # collide on the ``telegram_user_id`` UNIQUE constraint.
+    user = User(telegram_user_id=int(uuid.uuid4().int % 9_000_000_000) + 1_000_000_000)
+    db_session.add(user)
+    await db_session.flush()
 
     p = Project(
         name="analytics-test.com",
         api_key_hash=hash_api_key(generate_api_key()),
         admin_chat_id=999,
+        owner_user_id=user.id,
     )
     db_session.add(p)
     await db_session.flush()

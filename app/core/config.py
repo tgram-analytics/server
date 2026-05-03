@@ -38,6 +38,24 @@ class Settings(BaseSettings):
     # ── Rate limiting ─────────────────────────────────────────────────────
     rate_limit_per_second: int = 100
 
+    # ── Retention cap ─────────────────────────────────────────────────────
+    # Hard ceiling on ``ProjectSettings.retention_days`` for user-driven
+    # updates (the Telegram /settings flow). ``None`` means no cap —
+    # OSS / self-host users can pick any value, including 0 ("forever").
+    # The cloud overlay sets this to 60 to keep the free tier from
+    # accumulating unbounded raw events. When set, the value also acts
+    # as the create-time default for new projects (via the cloud
+    # pre-create hook); existing projects keep their stored value but
+    # cannot be raised above the cap on the next user edit.
+    max_retention_days: int | None = None
+
+    # ── Redis ─────────────────────────────────────────────────────────────
+    # Optional. Required only for multi-replica deployments where the daily
+    # visitor-hash salt (and, in later phases, the rate limiter) must be
+    # shared across processes. Single-replica self-host installs leave this
+    # unset and fall back to in-process state.
+    redis_url: str | None = None
+
     @field_validator("telegram_bot_token")
     @classmethod
     def token_must_not_be_empty(cls, v: str) -> str:

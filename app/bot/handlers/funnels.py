@@ -7,6 +7,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -16,10 +17,12 @@ from telegram import (
 )
 from telegram.ext import ContextTypes
 
+from app.bot.auth import requires_user
 from app.bot.constants import PERIOD_LABEL, PERIODS, TIME_WINDOW_LABEL, TIME_WINDOWS, escape_photo
 from app.bot.states import BotStateService
 from app.core.config import get_settings
 from app.core.database import get_session_factory
+from app.models.user import User
 from app.services.analytics import list_event_names
 from app.services.charts import ChartGenerationError, generate_funnel_chart
 from app.services.funnels import (
@@ -61,13 +64,15 @@ def _funnel_view_keyboard(
 # ── Public menu ──────────────────────────────────────────────────────────────
 
 
-async def show_funnels_menu(query: CallbackQuery, project_id_str: str, admin_chat_id: int) -> None:
+async def show_funnels_menu(
+    query: CallbackQuery, project_id_str: str, owner_user_id: uuid.UUID
+) -> None:
     """List saved funnels for a project."""
     pid = uuid.UUID(project_id_str)
 
     factory = get_session_factory()
     async with factory() as session:
-        project = await get_project(session, pid, admin_chat_id)
+        project = await get_project(session, pid, owner_user_id)
         if project is None:
             await query.edit_message_text("❌ Project not found.")
             return
@@ -95,18 +100,20 @@ async def show_funnels_menu(query: CallbackQuery, project_id_str: str, admin_cha
 # ── Callback dispatcher ─────────────────────────────────────────────────────
 
 
-async def funnel_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+@requires_user
+async def funnel_callback(
+    update: Update,
+    ctx: ContextTypes.DEFAULT_TYPE,
+    *,
+    user: User,
+    session: AsyncSession,
+) -> None:
     """Handle all funnel-related callbacks."""
     query = update.callback_query
     assert query is not None
     await query.answer()
 
-    settings = get_settings()
-    admin_chat_id = settings.admin_chat_id
-
-    if update.effective_user is None or update.effective_user.id != admin_chat_id:
-        return
-
+    owner_user_id = user.id
     data: str = query.data or ""
 
     if data.startswith("fnl_add:"):
@@ -122,21 +129,21 @@ async def funnel_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
 
     elif data.startswith("fnl_win:"):
         window_key = data[8:]
-        await _pick_time_window(query, window_key, admin_chat_id)
+        await _pick_time_window(query, window_key, owner_user_id)
 
     elif data.startswith("fnl_view:"):
         # fnl_view:{funnel_id}:{period}
         parts = data[9:].rsplit(":", 1)
         if len(parts) == 2:
-            await _view_funnel(await escape_photo(query), parts[0], admin_chat_id, period=parts[1])
+            await _view_funnel(await escape_photo(query), parts[0], owner_user_id, period=parts[1])
 
     elif data.startswith("fnl_del:"):
         funnel_id_str = data[8:]
-        await _delete_funnel(query, funnel_id_str, admin_chat_id)
+        await _delete_funnel(query, funnel_id_str, owner_user_id)
 
     elif data.startswith("back:funnels:"):
         project_id_str = data[13:]
-        await show_funnels_menu(await escape_photo(query), project_id_str, admin_chat_id)
+        await show_funnels_menu(await escape_photo(query), project_id_str, owner_user_id)
 
 
 # ── Creation flow ────────────────────────────────────────────────────────────
@@ -337,7 +344,9 @@ async def _finalize_events(query: CallbackQuery) -> None:
     )
 
 
-async def _pick_time_window(query: CallbackQuery, window_key: str, admin_chat_id: int) -> None:
+async def _pick_time_window(
+    query: CallbackQuery, window_key: str, owner_user_id: uuid.UUID
+) -> None:
     """Time window selected — create the funnel and show first results."""
     assert isinstance(query.message, Message)
     chat_id = query.message.chat_id
@@ -414,7 +423,7 @@ async def _pick_time_window(query: CallbackQuery, window_key: str, admin_chat_id
 async def _view_funnel(
     query: CallbackQuery,
     funnel_id_str: str,
-    admin_chat_id: int,
+    owner_user_id: uuid.UUID,
     period: str = "30d",
 ) -> None:
     """Run funnel analysis and send a chart."""
@@ -427,7 +436,7 @@ async def _view_funnel(
             await query.edit_message_text("❌ Funnel not found.")
             return
 
-        project = await get_project(session, funnel.project_id, admin_chat_id)
+        project = await get_project(session, funnel.project_id, owner_user_id)
         if project is None:
             await query.edit_message_text("❌ Project not found.")
             return
@@ -520,7 +529,9 @@ async def _view_funnel(
     )
 
 
-async def _delete_funnel(query: CallbackQuery, funnel_id_str: str, admin_chat_id: int) -> None:
+async def _delete_funnel(
+    query: CallbackQuery, funnel_id_str: str, owner_user_id: uuid.UUID
+) -> None:
     """Delete a funnel and return to the funnels list."""
     factory = get_session_factory()
     async with factory() as session:
@@ -529,7 +540,7 @@ async def _delete_funnel(query: CallbackQuery, funnel_id_str: str, admin_chat_id
             await query.edit_message_text("❌ Funnel not found.")
             return
 
-        project = await get_project(session, funnel.project_id, admin_chat_id)
+        project = await get_project(session, funnel.project_id, owner_user_id)
         if project is None:
             await query.edit_message_text("❌ Project not found.")
             return
@@ -538,7 +549,7 @@ async def _delete_funnel(query: CallbackQuery, funnel_id_str: str, admin_chat_id
         await delete_funnel(session, funnel.id)
         await session.commit()
 
-    await show_funnels_menu(await escape_photo(query), project_id_str, admin_chat_id)
+    await show_funnels_menu(await escape_photo(query), project_id_str, owner_user_id)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

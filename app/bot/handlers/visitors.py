@@ -123,14 +123,14 @@ async def _build_visitors_text(
 
 
 async def show_visitors_menu(
-    query: CallbackQuery, project_id_str: str, admin_chat_id: int, period: str = "7d"
+    query: CallbackQuery, project_id_str: str, owner_user_id: uuid.UUID, period: str = "7d"
 ) -> None:
     """Show visitor breakdown text with period and chart buttons."""
     pid = uuid.UUID(project_id_str)
 
     factory = get_session_factory()
     async with factory() as session:
-        project = await get_project(session, pid, admin_chat_id)
+        project = await get_project(session, pid, owner_user_id)
         if project is None:
             await query.edit_message_text("❌ Project not found.")
             return
@@ -145,16 +145,16 @@ async def show_visitors_menu(
 
 
 async def update_visitors_period(
-    query: CallbackQuery, project_id_str: str, admin_chat_id: int, period: str
+    query: CallbackQuery, project_id_str: str, owner_user_id: uuid.UUID, period: str
 ) -> None:
     """Re-render visitors text with a different period."""
-    await show_visitors_menu(query, project_id_str, admin_chat_id, period)
+    await show_visitors_menu(query, project_id_str, owner_user_id, period)
 
 
 async def send_visitors_chart(
     query: CallbackQuery,
     project_id_str: str,
-    admin_chat_id: int,
+    owner_user_id: uuid.UUID,
     dimension: str,
     period: str,
 ) -> None:
@@ -176,7 +176,7 @@ async def send_visitors_chart(
 
     factory = get_session_factory()
     async with factory() as session:
-        project = await get_project(session, pid, admin_chat_id)
+        project = await get_project(session, pid, owner_user_id)
         if project is None:
             await query.answer("❌ Project not found.", show_alert=True)
             return

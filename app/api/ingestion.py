@@ -1,7 +1,9 @@
 """Event ingestion endpoints: POST /api/v1/track and POST /api/v1/pageview.
 
 Authentication: ``api_key`` field in the JSON request body.
-Rate limiting:  per-project sliding-window (configurable, default 100 req/s).
+Rate limiting:  per-project sliding-window. Limit is
+                ``project.rate_limit_per_second`` when set, else
+                ``Settings.rate_limit_per_second`` (default 100 req/s).
 Origin check:   project's domain_allowlist; empty list = allow all.
 """
 
@@ -21,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.database import get_session, get_session_factory
+from app.core.privacy import hash_visitor, parse_user_agent, scrub_properties
 from app.core.security import validate_api_key
 from app.schemas.event import PageviewRequest, TrackEventRequest
 from app.services.events import evaluate_alerts, insert_event, is_origin_allowed
@@ -168,14 +171,22 @@ async def _resolve_project(
     api_key: str,
     origin: str | None,
     session: AsyncSession,
-    rate_limit: int,
+    default_rate_limit: int,
 ) -> Project:
-    """Validate API key, rate limit, and origin. Returns the Project."""
+    """Validate API key, rate limit, and origin. Returns the Project.
+
+    The effective per-second rate limit is ``project.rate_limit_per_second``
+    when set, falling back to ``default_rate_limit`` (the global
+    ``Settings.rate_limit_per_second``) when the column is NULL. Cloud
+    overlays set the per-row override at project-create time so each
+    plan tier gets its own cap.
+    """
     project = await validate_api_key(api_key, session)
     if project is None:
         raise HTTPException(status_code=400, detail="Invalid API key")
 
-    if _is_rate_limited(project.id, rate_limit):
+    effective_limit = project.rate_limit_per_second or default_rate_limit
+    if _is_rate_limited(project.id, effective_limit):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     if not is_origin_allowed(project.domain_allowlist, origin):
@@ -202,13 +213,26 @@ async def track(
     origin = request.headers.get("origin")
     project = await _resolve_project(body.api_key, origin, session, settings.rate_limit_per_second)
 
+    # Privacy: derive visitor_hash and parsed-UA fields here; raw IP/UA never
+    # leave this function.
+    client_ip = request.client.host if request.client else ""
+    ua = request.headers.get("user-agent", "")
+    visitor_hash = await hash_visitor(project.id, client_ip, ua)
+    browser, os_name, device_type = parse_user_agent(ua)
+
+    scrubbed, _dropped, _oversized = scrub_properties(body.properties, project_id=project.id)
+
     await insert_event(
         session,
         project_id=project.id,
         event_name=body.event_name,
         session_id=body.session_id,
-        properties=body.properties,
+        properties=scrubbed,
         timestamp=body.timestamp,
+        visitor_hash=visitor_hash,
+        browser=browser,
+        os=os_name,
+        device_type=device_type,
     )
     await session.commit()
 
@@ -232,19 +256,32 @@ async def pageview(
     origin = request.headers.get("origin")
     project = await _resolve_project(body.api_key, origin, session, settings.rate_limit_per_second)
 
+    # Privacy: derive visitor_hash and parsed-UA fields here; raw IP/UA never
+    # leave this function.
+    client_ip = request.client.host if request.client else ""
+    ua = request.headers.get("user-agent", "")
+    visitor_hash = await hash_visitor(project.id, client_ip, ua)
+    browser, os_name, device_type = parse_user_agent(ua)
+
     properties = {**body.properties, "url": body.url}
     if body.referrer:
         properties["referrer"] = body.referrer
+
+    scrubbed, _dropped, _oversized = scrub_properties(properties, project_id=project.id)
 
     await insert_event(
         session,
         project_id=project.id,
         event_name="pageview",
         session_id=body.session_id,
-        properties=properties,
+        properties=scrubbed,
         timestamp=body.timestamp,
         url=body.url,
         referrer=body.referrer,
+        visitor_hash=visitor_hash,
+        browser=browser,
+        os=os_name,
+        device_type=device_type,
     )
     await session.commit()
 

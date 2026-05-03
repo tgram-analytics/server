@@ -64,14 +64,33 @@ def test_migrations_apply_cleanly(db_url: str) -> None:
 # ── Project model ─────────────────────────────────────────────────────────────
 
 
+async def _seed_user(db_session: AsyncSession, telegram_user_id: int = 9_999_001) -> uuid.UUID:
+    """Insert a User row in the current transaction and return its id.
+
+    Phase 3.3+: ``projects.owner_user_id`` is NOT NULL, so every project
+    insert in these tests requires a parent ``users`` row. We can't use
+    the ``singleton_user`` fixture here because it commits through a
+    separate session while ``db_session`` runs inside a rolled-back
+    transaction.
+    """
+    from app.models.user import User
+
+    user = User(telegram_user_id=telegram_user_id)
+    db_session.add(user)
+    await db_session.flush()
+    return user.id
+
+
 async def test_project_can_be_created(db_session: AsyncSession) -> None:
     """Project can be inserted with all required fields."""
     from app.models.project import Project
 
+    owner_id = await _seed_user(db_session)
     project = Project(
         name="acme.com",
         api_key_hash="sha256_deadbeef" + "a" * 52,
         admin_chat_id=123456789,
+        owner_user_id=owner_id,
     )
     db_session.add(project)
     await db_session.flush()
@@ -87,10 +106,15 @@ async def test_project_api_key_hash_unique(db_session: AsyncSession) -> None:
 
     from app.models.project import Project
 
+    owner_id = await _seed_user(db_session)
     shared_hash = "unique_hash_" + "b" * 52
 
-    p1 = Project(name="first.com", api_key_hash=shared_hash, admin_chat_id=1)
-    p2 = Project(name="second.com", api_key_hash=shared_hash, admin_chat_id=2)
+    p1 = Project(
+        name="first.com", api_key_hash=shared_hash, admin_chat_id=1, owner_user_id=owner_id
+    )
+    p2 = Project(
+        name="second.com", api_key_hash=shared_hash, admin_chat_id=2, owner_user_id=owner_id
+    )
 
     db_session.add(p1)
     await db_session.flush()
@@ -104,10 +128,12 @@ async def test_project_created_at_auto_populated(db_session: AsyncSession) -> No
     """created_at is set server-side and is not None after flush."""
     from app.models.project import Project
 
+    owner_id = await _seed_user(db_session)
     project = Project(
         name="timestamp-test.com",
         api_key_hash="ts_hash_" + "c" * 56,
         admin_chat_id=999,
+        owner_user_id=owner_id,
     )
     db_session.add(project)
     await db_session.flush()
@@ -124,10 +150,12 @@ async def test_event_can_be_inserted_minimal(db_session: AsyncSession) -> None:
     from app.models.event import Event
     from app.models.project import Project
 
+    owner_id = await _seed_user(db_session)
     project = Project(
         name="event-test.com",
         api_key_hash="evt_hash_" + "d" * 55,
         admin_chat_id=111,
+        owner_user_id=owner_id,
     )
     db_session.add(project)
     await db_session.flush()
@@ -151,10 +179,12 @@ async def test_event_properties_defaults_to_empty_dict(db_session: AsyncSession)
     from app.models.event import Event
     from app.models.project import Project
 
+    owner_id = await _seed_user(db_session)
     project = Project(
         name="props-test.com",
         api_key_hash="props_hash_" + "e" * 53,
         admin_chat_id=222,
+        owner_user_id=owner_id,
     )
     db_session.add(project)
     await db_session.flush()
@@ -178,10 +208,12 @@ async def test_event_received_at_is_server_time(db_session: AsyncSession) -> Non
     from app.models.event import Event
     from app.models.project import Project
 
+    owner_id = await _seed_user(db_session)
     project = Project(
         name="rcvd-test.com",
         api_key_hash="rcvd_hash_" + "f" * 54,
         admin_chat_id=333,
+        owner_user_id=owner_id,
     )
     db_session.add(project)
     await db_session.flush()
@@ -210,10 +242,12 @@ async def test_settings_retention_days_defaults_to_90(db_session: AsyncSession) 
     from app.models.project import Project
     from app.models.settings import ProjectSettings
 
+    owner_id = await _seed_user(db_session)
     project = Project(
         name="settings-test.com",
         api_key_hash="cfg_hash_" + "g" * 55,
         admin_chat_id=444,
+        owner_user_id=owner_id,
     )
     db_session.add(project)
     await db_session.flush()

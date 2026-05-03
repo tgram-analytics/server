@@ -101,7 +101,7 @@ async def disable_alert(
     """Set is_active=False on an alert (called from notification buttons).
 
     Does not verify project ownership — the bot already authenticates the
-    admin_chat_id before dispatching to this handler.
+    user before dispatching to this handler.
     Returns None if the alert is not found.
     """
     alert = await get_alert(session, alert_id)
@@ -113,11 +113,11 @@ async def disable_alert(
     return alert
 
 
-async def list_active_alerts_for_admin(
+async def get_active_alerts_across_projects(
     session: AsyncSession,
-    admin_chat_id: int,
+    owner_user_id: uuid.UUID,
 ) -> list[tuple[Alert, str]]:
-    """Return all active alerts across all projects owned by *admin_chat_id*.
+    """Return all active alerts across all projects owned by *owner_user_id*.
 
     Returns a list of ``(alert, project_name)`` tuples ordered by project name
     then alert creation time.
@@ -128,7 +128,7 @@ async def list_active_alerts_for_admin(
         select(Alert, Project.name)
         .join(Project, Alert.project_id == Project.id)
         .where(
-            Project.admin_chat_id == admin_chat_id,
+            Project.owner_user_id == owner_user_id,
             Alert.is_active == True,  # noqa: E712
         )
         .order_by(Project.name, Alert.created_at)

@@ -24,10 +24,12 @@ from telegram import (
 )
 from telegram.ext import ContextTypes
 
+from app.bot.auth import requires_user
 from app.bot.constants import PERIOD_LABEL, PERIODS
 from app.core.config import get_settings
 from app.core.database import get_session_factory
 from app.models.event import Event
+from app.models.user import User
 from app.services.analytics import compare_periods, events_over_time
 from app.services.charts import ChartGenerationError, generate_comparison_chart, generate_line_chart
 from app.services.projects import get_project, list_projects
@@ -124,7 +126,9 @@ async def _get_top_event_data(
 # ── Public handlers ────────────────────────────────────────────────────────────
 
 
-async def show_reports_menu(query: CallbackQuery, project_id_str: str, admin_chat_id: int) -> None:
+async def show_reports_menu(
+    query: CallbackQuery, project_id_str: str, owner_user_id: uuid.UUID
+) -> None:
     """Show a 7-day analytics text summary for the project."""
     pid = uuid.UUID(project_id_str)
     now = datetime.now(UTC)
@@ -132,7 +136,7 @@ async def show_reports_menu(query: CallbackQuery, project_id_str: str, admin_cha
 
     factory = get_session_factory()
     async with factory() as session:
-        project = await get_project(session, pid, admin_chat_id)
+        project = await get_project(session, pid, owner_user_id)
         if project is None:
             await query.edit_message_text("❌ Project not found.")
             return
@@ -188,7 +192,7 @@ async def show_reports_menu(query: CallbackQuery, project_id_str: str, admin_cha
 async def send_chart_photo(
     query: CallbackQuery,
     project_id_str: str,
-    admin_chat_id: int,
+    owner_user_id: uuid.UUID,
     period: str = "7d",
     gran: str = "day",
 ) -> None:
@@ -204,7 +208,7 @@ async def send_chart_photo(
 
     factory = get_session_factory()
     async with factory() as session:
-        project = await get_project(session, pid, admin_chat_id)
+        project = await get_project(session, pid, owner_user_id)
         if project is None:
             await query.edit_message_text("❌ Project not found.")
             return
@@ -261,7 +265,7 @@ async def send_chart_photo(
 async def update_report_chart(
     query: CallbackQuery,
     project_id_str: str,
-    admin_chat_id: int,
+    owner_user_id: uuid.UUID,
     period: str,
     gran: str,
 ) -> None:
@@ -272,7 +276,7 @@ async def update_report_chart(
 
     factory = get_session_factory()
     async with factory() as session:
-        project = await get_project(session, pid, admin_chat_id)
+        project = await get_project(session, pid, owner_user_id)
         if project is None:
             await query.answer("❌ Project not found.", show_alert=True)
             return
@@ -308,7 +312,7 @@ async def update_report_chart(
 async def send_report_comparison(
     query: CallbackQuery,
     project_id_str: str,
-    admin_chat_id: int,
+    owner_user_id: uuid.UUID,
     period: str,
     gran: str,
 ) -> None:
@@ -324,7 +328,7 @@ async def send_report_comparison(
 
     factory = get_session_factory()
     async with factory() as session:
-        project = await get_project(session, pid, admin_chat_id)
+        project = await get_project(session, pid, owner_user_id)
         if project is None:
             await query.answer("❌ Project not found.", show_alert=True)
             return
@@ -401,16 +405,20 @@ async def send_report_comparison(
 # ── /report command ────────────────────────────────────────────────────────────
 
 
-async def report_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+@requires_user
+async def report_command(
+    update: Update,
+    ctx: ContextTypes.DEFAULT_TYPE,
+    *,
+    user: User,
+    session: AsyncSession,
+) -> None:
     """/report [event_name] — send an analytics chart for a specific event."""
     assert update.message is not None
-    settings = get_settings()
-    admin_chat_id = settings.admin_chat_id
+    owner_user_id = user.id
     event_name = " ".join(ctx.args) if ctx.args else None
 
-    factory = get_session_factory()
-    async with factory() as session:
-        projects = await list_projects(session, admin_chat_id)
+    projects = await list_projects(session, owner_user_id)
 
     if not projects:
         await update.message.reply_text(
@@ -471,7 +479,10 @@ async def report_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def handle_report_project_pick(
-    query: CallbackQuery, project_id_str: str, admin_chat_id: int, ctx: ContextTypes.DEFAULT_TYPE
+    query: CallbackQuery,
+    project_id_str: str,
+    owner_user_id: uuid.UUID,
+    ctx: ContextTypes.DEFAULT_TYPE,
 ) -> None:
     """Handle rpt_pp: callback — user picked a project after /report <event>."""
     assert isinstance(query.message, Message)
@@ -483,7 +494,7 @@ async def handle_report_project_pick(
     pid = uuid.UUID(project_id_str)
     factory = get_session_factory()
     async with factory() as session:
-        project = await get_project(session, pid, admin_chat_id)
+        project = await get_project(session, pid, owner_user_id)
     if project is None:
         await query.edit_message_text("❌ Project not found.")
         return

@@ -143,6 +143,60 @@ def session_factory(async_engine: AsyncEngine):
 
 
 @pytest.fixture()
+async def singleton_user(db_url: str, async_engine: AsyncEngine):
+    """Bootstrap the self-host singleton User and ``_singleton_user_id`` cache.
+
+    The ``@requires_user`` decorator (Phase 3.3) opens a session via the
+    module-level ``get_session_factory()`` and resolves the caller through
+    ``app.bot.auth._singleton_user_id``. Tests that exercise decorated
+    handlers must therefore:
+
+    1. Have ``init_db()`` called so ``get_session_factory()`` works.
+    2. Have a ``User`` row whose UUID matches ``_singleton_user_id``.
+
+    This fixture does both, yields the ``User``, and tears everything down
+    so test isolation is preserved.
+    """
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.bot import auth as auth_mod
+    from app.bot.auth import ensure_singleton_user
+    from app.core import database as db_mod
+
+    # Snapshot prior state so we can restore it cleanly.
+    prev_engine = db_mod._engine
+    prev_factory = db_mod._session_factory
+    prev_singleton = auth_mod._singleton_user_id
+
+    # Wire the module-level singletons to the test engine. We cannot call
+    # ``init_db(db_url)`` because it builds a *second* engine which would
+    # leak connections; instead we reuse ``async_engine`` directly.
+    db_mod._engine = async_engine
+    db_mod._session_factory = async_sessionmaker(async_engine, expire_on_commit=False)
+
+    # Use a chat id that won't collide with other test data.
+    tg_id = 111
+    factory = db_mod._session_factory
+    async with factory() as session:
+        user = await ensure_singleton_user(session, tg_id)
+        await session.commit()
+        user_id = user.id
+
+    auth_mod._singleton_user_id = user_id
+
+    try:
+        yield user
+    finally:
+        auth_mod._singleton_user_id = prev_singleton
+        # Best-effort: remove the user row we created.
+        async with factory() as session:
+            await session.execute(text("DELETE FROM users WHERE id = :id"), {"id": str(user_id)})
+            await session.commit()
+        db_mod._engine = prev_engine
+        db_mod._session_factory = prev_factory
+
+
+@pytest.fixture()
 async def api_client(async_engine: AsyncEngine) -> AsyncGenerator[AsyncClient, None]:
     """Full-stack HTTP client connected to the real test DB.
 

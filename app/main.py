@@ -1,5 +1,6 @@
 """FastAPI application factory and lifespan handler."""
 
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -13,6 +14,10 @@ from app.api.webhook import router as webhook_router
 from app.bot.setup import init_bot, shutdown_bot
 from app.core.config import get_settings
 from app.core.database import close_db, init_db
+from app.core.privacy import RedactingFilter
+from app.core.redis_client import close_redis, init_redis
+from app.jobs.scheduler import shutdown_scheduler, start_scheduler
+from app.plugins import load_plugins
 
 
 @asynccontextmanager
@@ -20,6 +25,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: initialise resources on startup, clean up on shutdown."""
     settings = get_settings()
     init_db(settings.database_url)
+    init_redis(settings.redis_url)
+    start_scheduler()
+    # Discover and register downstream extensions BEFORE init_bot — plugins
+    # may register bot filters that build_application needs to compose, and
+    # may register a user resolver that init_bot's singleton bootstrap
+    # would otherwise be the sole source of truth for.
+    load_plugins()
     await init_bot(
         token=settings.telegram_bot_token,
         admin_chat_id=settings.admin_chat_id,
@@ -27,11 +39,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     yield
     await shutdown_bot()
+    await shutdown_scheduler()
+    await close_redis()
     await close_db()
 
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
+    # Install the redacting filter on the root logger so every logger in the
+    # process (uvicorn, sqlalchemy, app.*) inherits it. ``create_app()`` runs
+    # at import time and only once; we still guard against duplicate
+    # installations in case it is reloaded by tests.
+    root_logger = logging.getLogger()
+    if not any(isinstance(f, RedactingFilter) for f in root_logger.filters):
+        root_logger.addFilter(RedactingFilter())
+
     app = FastAPI(
         title="tgram-analytics",
         description=(

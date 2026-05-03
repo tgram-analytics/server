@@ -6,6 +6,7 @@ import html
 import uuid
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -16,10 +17,12 @@ from telegram import (
 )
 from telegram.ext import ContextTypes
 
+from app.bot.auth import requires_user
 from app.bot.constants import escape_photo
 from app.bot.states import BotStateService
 from app.core.config import get_settings
 from app.core.database import get_session_factory
+from app.models.user import User
 from app.services.analytics import (
     compare_periods,
     count_events,
@@ -90,14 +93,18 @@ def _event_chart_keyboard(period: str, gran: str) -> InlineKeyboardMarkup:
 # ── /events command ────────────────────────────────────────────────────────────
 
 
-async def events_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+@requires_user
+async def events_command(
+    update: Update,
+    ctx: ContextTypes.DEFAULT_TYPE,
+    *,
+    user: User,
+    session: AsyncSession,
+) -> None:
     """Show project list so the user can pick one to browse events."""
     assert update.message is not None
-    settings = get_settings()
 
-    factory = get_session_factory()
-    async with factory() as session:
-        projects = await list_projects(session, settings.admin_chat_id)
+    projects = await list_projects(session, user.id)
 
     if not projects:
         await update.message.reply_text(
@@ -118,64 +125,68 @@ async def events_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
 # ── Callback dispatcher ────────────────────────────────────────────────────────
 
 
-async def events_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+@requires_user
+async def events_callback(
+    update: Update,
+    ctx: ContextTypes.DEFAULT_TYPE,
+    *,
+    user: User,
+    session: AsyncSession,
+) -> None:
     """Handle all event-browsing callbacks."""
     query = update.callback_query
     assert query is not None
     await query.answer()
 
-    settings = get_settings()
-    admin_chat_id = settings.admin_chat_id
-
-    if update.effective_user is None or update.effective_user.id != admin_chat_id:
-        return
-
+    owner_user_id = user.id
     data: str = query.data or ""
 
     if data == "back:events":
-        await _show_events_list_from_state(await escape_photo(query), admin_chat_id)
+        await _show_events_list_from_state(await escape_photo(query), owner_user_id)
 
     elif data.startswith("evt:"):
         event_name = data[4:]
-        await _show_event_detail(query, event_name, admin_chat_id)
+        await _show_event_detail(query, event_name, owner_user_id)
 
     elif data == "evta:alert":
-        await _start_alert_for_event(query, admin_chat_id)
+        await _start_alert_for_event(query, owner_user_id)
 
     elif data == "evta:chart":
-        await _send_event_chart(query, admin_chat_id)
+        await _send_event_chart(query, owner_user_id)
 
     elif data.startswith("evta:prd:"):
         # evta:prd:{period}:{gran}
         parts = data[9:].split(":", 1)
         if len(parts) == 2:
-            await _update_event_chart(query, admin_chat_id, period=parts[0], gran=parts[1])
+            await _update_event_chart(query, owner_user_id, period=parts[0], gran=parts[1])
 
     elif data.startswith("evta:cmp:"):
         # evta:cmp:{period}:{gran}
         parts = data[9:].split(":", 1)
         if len(parts) == 2:
-            await _send_event_comparison(query, admin_chat_id, period=parts[0], gran=parts[1])
+            await _send_event_comparison(query, owner_user_id, period=parts[0], gran=parts[1])
 
     elif data == "evta:pie":
-        await _show_pie_property_picker(query, admin_chat_id)
+        await _show_pie_property_picker(query, owner_user_id)
 
     elif data.startswith("evta:pie_k:"):
         prop_key = data[11:]
-        await _send_event_pie_chart(query, admin_chat_id, prop_key)
+        await _send_event_pie_chart(query, owner_user_id, prop_key)
 
 
 # ── Events list ────────────────────────────────────────────────────────────────
 
 
-async def show_events_menu(query: CallbackQuery, project_id_str: str, admin_chat_id: int) -> None:
+async def show_events_menu(
+    query: CallbackQuery, project_id_str: str, owner_user_id: uuid.UUID
+) -> None:
     """Query distinct event names for a project and display them as buttons."""
     assert isinstance(query.message, Message)
     pid = uuid.UUID(project_id_str)
 
     factory = get_session_factory()
     async with factory() as session:
-        project = await get_project(session, pid, admin_chat_id)
+        project = await get_project(session, pid, owner_user_id)
         if project is None:
             await query.edit_message_text("❌ Project not found.")
             return
@@ -216,7 +227,7 @@ async def show_events_menu(query: CallbackQuery, project_id_str: str, admin_chat
     )
 
 
-async def _show_events_list_from_state(query: CallbackQuery, admin_chat_id: int) -> None:
+async def _show_events_list_from_state(query: CallbackQuery, owner_user_id: uuid.UUID) -> None:
     """Re-show events list using project_id stored in conversation state."""
     assert isinstance(query.message, Message)
     factory = get_session_factory()
@@ -233,13 +244,15 @@ async def _show_events_list_from_state(query: CallbackQuery, admin_chat_id: int)
         await query.edit_message_text("❌ Session expired. Use /events to start again.")
         return
 
-    await show_events_menu(query, project_id_str, admin_chat_id)
+    await show_events_menu(query, project_id_str, owner_user_id)
 
 
 # ── Event detail ───────────────────────────────────────────────────────────────
 
 
-async def _show_event_detail(query: CallbackQuery, event_name: str, admin_chat_id: int) -> None:
+async def _show_event_detail(
+    query: CallbackQuery, event_name: str, owner_user_id: uuid.UUID
+) -> None:
     """Show stats and action buttons for a specific event."""
     assert isinstance(query.message, Message)
     factory = get_session_factory()
@@ -257,7 +270,7 @@ async def _show_event_detail(query: CallbackQuery, event_name: str, admin_chat_i
             return
 
         pid = uuid.UUID(project_id_str)
-        project = await get_project(session, pid, admin_chat_id)
+        project = await get_project(session, pid, owner_user_id)
         if project is None:
             await query.edit_message_text("❌ Project not found.")
             return
@@ -318,7 +331,7 @@ async def _show_event_detail(query: CallbackQuery, event_name: str, admin_chat_i
 # ── Actions ────────────────────────────────────────────────────────────────────
 
 
-async def _start_alert_for_event(query: CallbackQuery, admin_chat_id: int) -> None:
+async def _start_alert_for_event(query: CallbackQuery, owner_user_id: uuid.UUID) -> None:
     """Transition to the add_alert flow, pre-filled with the selected event name."""
     assert isinstance(query.message, Message)
     factory = get_session_factory()
@@ -368,7 +381,7 @@ async def _start_alert_for_event(query: CallbackQuery, admin_chat_id: int) -> No
 
 
 async def _send_event_chart(
-    query: CallbackQuery, admin_chat_id: int, period: str = "7d", gran: str = "day"
+    query: CallbackQuery, owner_user_id: uuid.UUID, period: str = "7d", gran: str = "day"
 ) -> None:
     """Generate and send a line chart for the selected event as a new photo reply."""
     assert isinstance(query.message, Message)
@@ -390,7 +403,7 @@ async def _send_event_chart(
             return
 
         pid = uuid.UUID(project_id_str)
-        project = await get_project(session, pid, admin_chat_id)
+        project = await get_project(session, pid, owner_user_id)
         if project is None:
             await query.edit_message_text("❌ Project not found.")
             return
@@ -448,7 +461,7 @@ async def _send_event_chart(
 
 
 async def _update_event_chart(
-    query: CallbackQuery, admin_chat_id: int, period: str, gran: str
+    query: CallbackQuery, owner_user_id: uuid.UUID, period: str, gran: str
 ) -> None:
     """Edit the existing event chart photo in-place with a new period/granularity."""
     assert isinstance(query.message, Message)
@@ -470,7 +483,7 @@ async def _update_event_chart(
             return
 
         pid = uuid.UUID(project_id_str)
-        project = await get_project(session, pid, admin_chat_id)
+        project = await get_project(session, pid, owner_user_id)
         if project is None:
             await query.answer("❌ Project not found.", show_alert=True)
             return
@@ -513,7 +526,7 @@ async def _update_event_chart(
 
 
 async def _send_event_comparison(
-    query: CallbackQuery, admin_chat_id: int, period: str, gran: str
+    query: CallbackQuery, owner_user_id: uuid.UUID, period: str, gran: str
 ) -> None:
     """Edit the event chart photo to show current vs prior period comparison."""
     assert isinstance(query.message, Message)
@@ -535,7 +548,7 @@ async def _send_event_comparison(
             return
 
         pid = uuid.UUID(project_id_str)
-        project = await get_project(session, pid, admin_chat_id)
+        project = await get_project(session, pid, owner_user_id)
         if project is None:
             await query.answer("❌ Project not found.", show_alert=True)
             return
@@ -617,7 +630,7 @@ async def _send_event_comparison(
 # ── Pie chart ─────────────────────────────────────────────────────────────────
 
 
-async def _show_pie_property_picker(query: CallbackQuery, admin_chat_id: int) -> None:
+async def _show_pie_property_picker(query: CallbackQuery, owner_user_id: uuid.UUID) -> None:
     """List property keys for the current event so the user can pick one for a pie chart."""
     assert isinstance(query.message, Message)
     factory = get_session_factory()
@@ -664,7 +677,7 @@ async def _show_pie_property_picker(query: CallbackQuery, admin_chat_id: int) ->
 
 
 async def _send_event_pie_chart(
-    query: CallbackQuery, admin_chat_id: int, property_key: str
+    query: CallbackQuery, owner_user_id: uuid.UUID, property_key: str
 ) -> None:
     """Generate and send a pie chart for the selected event + property."""
     assert isinstance(query.message, Message)
@@ -686,7 +699,7 @@ async def _send_event_pie_chart(
             return
 
         pid = uuid.UUID(project_id_str)
-        project = await get_project(session, pid, admin_chat_id)
+        project = await get_project(session, pid, owner_user_id)
         if project is None:
             await query.edit_message_text("❌ Project not found.")
             return

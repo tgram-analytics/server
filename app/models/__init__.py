@@ -13,9 +13,11 @@ from app.models.funnel import Funnel
 from app.models.project import Project
 from app.models.scheduled_report import ChartPeriod, ReportFrequency, ScheduledReport
 from app.models.settings import ProjectSettings
+from app.models.user import User
 
 __all__ = [
     "Project",
+    "User",
     "Event",
     "Aggregation",
     "AggregationPeriod",

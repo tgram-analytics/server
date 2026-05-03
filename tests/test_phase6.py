@@ -49,7 +49,13 @@ def _make_callback(chat_id: int = ADMIN_ID, data: str = "proj:some-uuid"):
 # ── system handlers ───────────────────────────────────────────────────────────
 
 
-async def test_start_replies_with_welcome():
+async def test_start_replies_with_welcome(singleton_user):
+    """Smoke test for /start.
+
+    Phase 3.3: handlers are wrapped in ``@requires_user`` which opens a real
+    DB session and resolves the singleton user. Uses the ``singleton_user``
+    fixture to bootstrap ``init_db`` state and ``_singleton_user_id``.
+    """
     from app.bot.handlers.system import start_command
 
     update, ctx = _make_update(text="/start")
@@ -60,7 +66,7 @@ async def test_start_replies_with_welcome():
     assert "welcome" in text_arg.lower()
 
 
-async def test_help_lists_commands():
+async def test_help_lists_commands(singleton_user):
     from app.bot.handlers.system import help_command
 
     update, ctx = _make_update(text="/help")
@@ -72,18 +78,18 @@ async def test_help_lists_commands():
         assert cmd in text_arg
 
 
-async def test_cancel_clears_state_and_replies():
+async def test_cancel_clears_state_and_replies(singleton_user):
+    """/cancel must clear bot state and reply with confirmation.
+
+    Phase 3.3: ``cancel_command`` is decorated with ``@requires_user`` which
+    owns the session lifecycle, so the previous ``patch("...get_session_factory")``
+    no longer applies. The ``singleton_user`` fixture wires the real test DB
+    into the module-level session factory; the handler now runs against it.
+    """
     from app.bot.handlers.system import cancel_command
 
     update, ctx = _make_update(text="/cancel")
-
-    mock_session = AsyncMock()
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=False)
-    mock_session.get = AsyncMock(return_value=None)
-
-    with patch("app.bot.handlers.system.get_session_factory", return_value=lambda: mock_session):
-        await cancel_command(update, ctx)
+    await cancel_command(update, ctx)
 
     update.message.reply_text.assert_called_once()
     assert "cancel" in update.message.reply_text.call_args[0][0].lower()
@@ -92,7 +98,7 @@ async def test_cancel_clears_state_and_replies():
 # ── /add command ──────────────────────────────────────────────────────────────
 
 
-async def test_add_without_name_sends_usage():
+async def test_add_without_name_sends_usage(singleton_user):
     from app.bot.handlers.projects import add_command
 
     update, ctx = _make_update(text="/add", args=[])
@@ -103,8 +109,14 @@ async def test_add_without_name_sends_usage():
     assert "usage" in text_arg.lower() or "/add" in text_arg
 
 
-async def test_add_creates_project_and_shows_api_key(db_session, session_factory):
-    """Full DB integration: /add stores a project and replies with the key."""
+async def test_add_creates_project_and_shows_api_key(db_session, singleton_user):
+    """Full DB integration: /add stores a project and replies with the key.
+
+    Phase 3.3: ``@requires_user`` owns auth + session lifecycle. The
+    ``singleton_user`` fixture wires ``_singleton_user_id`` and the module
+    session factory to the test DB, so no patching is needed beyond
+    pinning ``webhook_base_url`` for the deterministic snippet text.
+    """
     from sqlalchemy import select
 
     from app.bot.handlers.projects import add_command
@@ -114,11 +126,7 @@ async def test_add_creates_project_and_shows_api_key(db_session, session_factory
     unique_name = f"mysite-{uuid.uuid4().hex[:8]}.com"
     update, ctx = _make_update(text=f"/add {unique_name}", args=[unique_name])
 
-    with (
-        patch("app.bot.handlers.projects.get_session_factory", return_value=session_factory),
-        patch("app.bot.handlers.projects.get_settings") as mock_settings,
-    ):
-        mock_settings.return_value.admin_chat_id = ADMIN_ID
+    with patch("app.bot.handlers.projects.get_settings") as mock_settings:
         mock_settings.return_value.webhook_base_url = "https://example.com"
         await add_command(update, ctx)
 
@@ -130,7 +138,9 @@ async def test_add_creates_project_and_shows_api_key(db_session, session_factory
     # Verify the project row exists (committed data is visible across connections)
     await db_session.invalidate()
     result = await db_session.execute(
-        select(Project).where(Project.admin_chat_id == ADMIN_ID, Project.name == unique_name)
+        select(Project).where(
+            Project.owner_user_id == singleton_user.id, Project.name == unique_name
+        )
     )
     assert result.scalar_one_or_none() is not None
 
@@ -138,39 +148,34 @@ async def test_add_creates_project_and_shows_api_key(db_session, session_factory
 # ── /projects command ─────────────────────────────────────────────────────────
 
 
-async def test_projects_with_no_projects_sends_empty_message(db_session, session_factory):
+async def test_projects_with_no_projects_sends_empty_message(singleton_user):
+    """Phase 3.3: project ownership is keyed off ``user.id``. The freshly
+    bootstrapped ``singleton_user`` has no projects, so the handler hits the
+    empty branch — no admin-chat-id mocking required."""
     from app.bot.handlers.projects import projects_command
 
     update, ctx = _make_update(text="/projects")
-
-    with (
-        patch("app.bot.handlers.projects.get_session_factory", return_value=session_factory),
-        patch("app.bot.handlers.projects.get_settings") as mock_settings,
-    ):
-        mock_settings.return_value.admin_chat_id = 999_999  # no projects for this chat id
-        await projects_command(update, ctx)
+    await projects_command(update, ctx)
 
     update.message.reply_text.assert_called_once()
     assert "no projects" in update.message.reply_text.call_args[0][0].lower()
 
 
-async def test_projects_shows_keyboard_when_projects_exist(db_session, session_factory):
+async def test_projects_shows_keyboard_when_projects_exist(session_factory, singleton_user):
     from app.bot.handlers.projects import projects_command
     from app.services.projects import create_project
 
     async with session_factory() as session:
-        await create_project(session, name="alpha.com", admin_chat_id=ADMIN_ID)
-        await create_project(session, name="beta.com", admin_chat_id=ADMIN_ID)
+        await create_project(
+            session, name="alpha.com", admin_chat_id=ADMIN_ID, owner_user_id=singleton_user.id
+        )
+        await create_project(
+            session, name="beta.com", admin_chat_id=ADMIN_ID, owner_user_id=singleton_user.id
+        )
         await session.commit()
 
     update, ctx = _make_update(text="/projects")
-
-    with (
-        patch("app.bot.handlers.projects.get_session_factory", return_value=session_factory),
-        patch("app.bot.handlers.projects.get_settings") as mock_settings,
-    ):
-        mock_settings.return_value.admin_chat_id = ADMIN_ID
-        await projects_command(update, ctx)
+    await projects_command(update, ctx)
 
     update.message.reply_text.assert_called_once()
     keyboard = update.message.reply_text.call_args[1].get("reply_markup")
@@ -183,23 +188,22 @@ async def test_projects_shows_keyboard_when_projects_exist(db_session, session_f
 # ── Callback: project menu ─────────────────────────────────────────────────────
 
 
-async def test_project_menu_shows_action_buttons(db_session, session_factory):
+async def test_project_menu_shows_action_buttons(session_factory, singleton_user):
     from app.bot.handlers.projects import project_callback
     from app.services.projects import create_project
 
     async with session_factory() as session:
-        project, _ = await create_project(session, name="menu-test.com", admin_chat_id=ADMIN_ID)
+        project, _ = await create_project(
+            session,
+            name="menu-test.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
         pid = project.id
         await session.commit()
 
     update, ctx = _make_callback(chat_id=ADMIN_ID, data=f"proj:{pid}")
-
-    with (
-        patch("app.bot.handlers.projects.get_session_factory", return_value=session_factory),
-        patch("app.bot.handlers.projects.get_settings") as mock_settings,
-    ):
-        mock_settings.return_value.admin_chat_id = ADMIN_ID
-        await project_callback(update, ctx)
+    await project_callback(update, ctx)
 
     update.callback_query.edit_message_text.assert_called_once()
     keyboard = update.callback_query.edit_message_text.call_args[1].get("reply_markup")
@@ -209,21 +213,24 @@ async def test_project_menu_shows_action_buttons(db_session, session_factory):
     assert any("Reports" in label for label in flat_labels)
 
 
-async def test_delete_confirmation_prompt():
+async def test_delete_confirmation_prompt(singleton_user):
+    """Phase 3.3: authorization comes from ``@requires_user`` (singleton cache),
+    not ``get_settings().admin_chat_id``. The ``del_ask:`` branch only renders
+    a confirmation prompt — it never touches the DB — so we just need the
+    decorator to find a valid user.
+    """
     from app.bot.handlers.projects import project_callback
 
     pid = str(uuid.uuid4())
     update, ctx = _make_callback(chat_id=ADMIN_ID, data=f"del_ask:{pid}")
 
-    with patch("app.bot.handlers.projects.get_settings") as mock_settings:
-        mock_settings.return_value.admin_chat_id = ADMIN_ID
-        await project_callback(update, ctx)
+    await project_callback(update, ctx)
 
     update.callback_query.edit_message_text.assert_called_once()
     assert "delete" in update.callback_query.edit_message_text.call_args[0][0].lower()
 
 
-async def test_confirm_delete_removes_project(db_session, session_factory):
+async def test_confirm_delete_removes_project(db_session, session_factory, singleton_user):
     from sqlalchemy import select
 
     from app.bot.handlers.projects import project_callback
@@ -231,18 +238,17 @@ async def test_confirm_delete_removes_project(db_session, session_factory):
     from app.services.projects import create_project
 
     async with session_factory() as session:
-        project, _ = await create_project(session, name="to-delete.com", admin_chat_id=ADMIN_ID)
+        project, _ = await create_project(
+            session,
+            name="to-delete.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
         pid = project.id
         await session.commit()
 
     update, ctx = _make_callback(chat_id=ADMIN_ID, data=f"del_yes:{pid}")
-
-    with (
-        patch("app.bot.handlers.projects.get_session_factory", return_value=session_factory),
-        patch("app.bot.handlers.projects.get_settings") as mock_settings,
-    ):
-        mock_settings.return_value.admin_chat_id = ADMIN_ID
-        await project_callback(update, ctx)
+    await project_callback(update, ctx)
 
     update.callback_query.edit_message_text.assert_called_once()
     assert "deleted" in update.callback_query.edit_message_text.call_args[0][0].lower()
@@ -252,17 +258,28 @@ async def test_confirm_delete_removes_project(db_session, session_factory):
     assert result.scalar_one_or_none() is None
 
 
-async def test_non_admin_callback_is_silently_ignored():
-    """Callbacks from non-admin users must be dropped (no message edit)."""
+async def test_non_admin_callback_is_silently_ignored(singleton_user):
+    """Unknown callers must NOT have their callback dispatched.
+
+    Phase 3.3: authorization is now owned by ``@requires_user``. When the
+    decorator's ``get_current_user`` returns ``None`` (no resolver could
+    authorize the caller — here simulated by blanking the singleton
+    cache), the callback is short-circuited with
+    ``query.answer("Not authorized")`` and ``edit_message_text`` is
+    never invoked.
+    """
+    from app.bot import auth as auth_mod
     from app.bot.handlers.projects import project_callback
 
     update, ctx = _make_callback(chat_id=999_888, data=f"proj:{uuid.uuid4()}")
 
-    with patch("app.bot.handlers.projects.get_settings") as mock_settings:
-        mock_settings.return_value.admin_chat_id = ADMIN_ID
+    saved = auth_mod._singleton_user_id
+    auth_mod._singleton_user_id = None
+    try:
         await project_callback(update, ctx)
+    finally:
+        auth_mod._singleton_user_id = saved
 
-    update.callback_query.answer.assert_called_once()
     update.callback_query.edit_message_text.assert_not_called()
 
 

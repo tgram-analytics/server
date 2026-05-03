@@ -1,10 +1,14 @@
 """System command handlers: /start, /help, /cancel."""
 
+from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
+from app.bot.auth import requires_user
+from app.bot.handlers.onboarding import send_first_run_welcome
 from app.bot.states import BotStateService
-from app.core.database import get_session_factory
+from app.models.user import User
+from app.services.projects import list_projects
 
 _HELP_TEXT = (
     "📖 <b>Available commands</b>\n\n"
@@ -30,29 +34,58 @@ _START_KEYBOARD = InlineKeyboardMarkup(
 )
 
 
-async def start_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+@requires_user
+async def start_command(
+    update: Update,
+    ctx: ContextTypes.DEFAULT_TYPE,
+    *,
+    user: User,
+    session: AsyncSession,
+) -> None:
     assert update.message is not None
+
+    # First-run onboarding: anyone with zero projects gets the guided
+    # welcome instead of the home menu (which references concepts that
+    # don't exist yet for them).
+    projects = await list_projects(session, user.id)
+    if not projects:
+        first_name = ""
+        if update.effective_user is not None:
+            first_name = update.effective_user.first_name or ""
+        await send_first_run_welcome(update.message, first_name)
+        return
+
     await update.message.reply_text(
-        "👋 <b>Welcome to tgram-analytics!</b>\n\n"
-        "Self-hosted analytics you control via Telegram.",
+        "👋 <b>Welcome back!</b>",
         parse_mode="HTML",
         reply_markup=_START_KEYBOARD,
     )
 
 
-async def help_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+@requires_user
+async def help_command(
+    update: Update,
+    ctx: ContextTypes.DEFAULT_TYPE,
+    *,
+    user: User,
+    session: AsyncSession,
+) -> None:
     assert update.message is not None
     await update.message.reply_text(_HELP_TEXT, parse_mode="HTML")
 
 
-async def cancel_command(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+@requires_user
+async def cancel_command(
+    update: Update,
+    ctx: ContextTypes.DEFAULT_TYPE,
+    *,
+    user: User,
+    session: AsyncSession,
+) -> None:
     assert update.message is not None
     chat_id = update.effective_chat.id  # type: ignore[union-attr]
 
-    factory = get_session_factory()
-    async with factory() as session:
-        svc = BotStateService(session)
-        await svc.clear(chat_id)
-        await session.commit()
+    svc = BotStateService(session)
+    await svc.clear(chat_id)
 
     await update.message.reply_text("✅ Operation cancelled.")

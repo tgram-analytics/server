@@ -22,11 +22,19 @@ async def insert_event(
     timestamp: datetime | None = None,
     url: str | None = None,
     referrer: str | None = None,
+    visitor_hash: str | None = None,
+    browser: str | None = None,
+    os: str | None = None,
+    device_type: str | None = None,
 ) -> Event:
     """Insert an event row.
 
     ``received_at`` is always server time (set by the DB default).
     ``timestamp`` defaults to server now() when the caller passes None.
+
+    Privacy fields (``visitor_hash``, ``browser``, ``os``, ``device_type``)
+    are computed by the API layer from the request IP/UA and passed in
+    pre-derived; this service never sees the raw IP or UA.
     """
     event = Event(
         project_id=project_id,
@@ -35,6 +43,10 @@ async def insert_event(
         properties=properties,
         url=url,
         referrer=referrer,
+        visitor_hash=visitor_hash,
+        browser=browser,
+        os=os,
+        device_type=device_type,
     )
     if timestamp is not None:
         event.timestamp = timestamp
@@ -100,18 +112,35 @@ async def evaluate_alerts(
 
 
 def is_origin_allowed(domain_allowlist: list[str], origin: str | None) -> bool:
-    """Return True if the request origin passes the allowlist check.
+    """Return True if the request passes the allowlist check.
 
-    * Empty allowlist → accept all origins (no restriction).
-    * Non-empty allowlist + no Origin header → reject.
-    * Non-empty allowlist → extract host and check membership.
+    The allowlist is a browser-only guard against abuse of the public
+    ``proj_`` key embedded in JS bundles. Server-to-server callers (backend
+    SDKs, curl) don't send an ``Origin`` header and are authenticated by
+    the API key alone.
+
+    * Empty allowlist → accept all.
+    * No ``Origin`` header → accept (server-to-server).
+    * ``Origin: null`` (sandboxed/file://) → reject when allowlist is set.
+    * Entry may be a bare host, a URL, or a wildcard ``*.example.com``
+      matching any subdomain (but not the apex).
     """
     if not domain_allowlist:
         return True
     if origin is None:
+        return True
+    if origin == "null":
         return False
     from urllib.parse import urlparse
 
     host = urlparse(origin).netloc or origin
-    normalized = {urlparse(d).netloc or d for d in domain_allowlist}
-    return host in normalized
+    for entry in domain_allowlist:
+        if entry.startswith("*."):
+            suffix = entry[1:]  # ".example.com"
+            if host.endswith(suffix) and host != suffix[1:]:
+                return True
+            continue
+        normalized = urlparse(entry).netloc or entry
+        if host == normalized:
+            return True
+    return False

@@ -35,11 +35,24 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     from app.bot.handlers.alerts import alert_callback, alerts_command, handle_text_message
     from app.bot.handlers.events import events_callback, events_command
     from app.bot.handlers.funnels import funnel_callback
+    from app.bot.handlers.onboarding import onboarding_callback
     from app.bot.handlers.projects import add_command, project_callback, projects_command
     from app.bot.handlers.reports import report_command
     from app.bot.handlers.system import cancel_command, help_command, start_command
 
-    admin_filter = filters.Chat(chat_id=admin_chat_id)
+    # Defense-in-depth: every handler is also wrapped with ``@requires_user``
+    # which resolves the current ``User`` and short-circuits unauthorised
+    # callers. The ``filters.Chat(...)`` gate below is a cheap pre-filter
+    # so PTB doesn't dispatch updates from non-admin chats. Deployments
+    # that register a custom user resolver and additional filters via
+    # :mod:`app.extensions` may want to widen the audience — see
+    # :func:`app.extensions.register_bot_filter` for the AND-composition
+    # contract.
+    from app.extensions import get_bot_filters
+
+    admin_filter: filters.BaseFilter = filters.Chat(chat_id=admin_chat_id)
+    for extra in get_bot_filters():
+        admin_filter = admin_filter & extra
 
     app = ApplicationBuilder().token(token).updater(None).build()
 
@@ -58,6 +71,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     app.add_handler(CallbackQueryHandler(alert_callback, pattern=r"^(alert_|back:alerts:)"))
     app.add_handler(CallbackQueryHandler(events_callback, pattern=r"^(evt[a:]|back:events)"))
     app.add_handler(CallbackQueryHandler(funnel_callback, pattern=r"^(fnl_|back:funnels:)"))
+    app.add_handler(CallbackQueryHandler(onboarding_callback, pattern=r"^onb:"))
     app.add_handler(CallbackQueryHandler(project_callback))
 
     # Text messages for multi-step conversation flows (e.g., add-alert)
@@ -84,6 +98,19 @@ def get_bot() -> Bot:
 async def init_bot(token: str, admin_chat_id: int, webhook_base_url: str = "") -> None:
     """Initialise the bot application and optionally register the webhook."""
     global _application
+
+    # Bootstrap the singleton ``User`` for self-host mode. ``init_db`` has
+    # already run by the time this is called (cf. app/main.py lifespan).
+    # Local import to avoid circular imports during module load.
+    from app.bot import auth as _auth
+    from app.core.database import get_session_factory
+
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        user = await _auth.ensure_singleton_user(session, admin_chat_id)
+        await session.commit()
+        _auth._singleton_user_id = user.id
+
     _application = build_application(token, admin_chat_id)
     await _application.initialize()
     await _application.start()

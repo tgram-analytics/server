@@ -2,9 +2,10 @@
 
 > Self-hosted, privacy-first analytics controlled entirely through a Telegram bot.
 > No dashboard. No third parties. Just Telegram.
+> Or skip the setup — try the hosted version at [@MyTelegramAnalyticsBot](https://t.me/MyTelegramAnalyticsBot).
 
 [![CI](https://github.com/tgram-analytics/server/actions/workflows/ci.yml/badge.svg)](https://github.com/tgram-analytics/server/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: FSL-1.1-ALv2](https://img.shields.io/badge/License-FSL--1.1--ALv2-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/)
 
 ---
@@ -67,7 +68,7 @@ curl -X POST https://your-server.com/api/v1/track \
   -H "Content-Type: application/json" \
   -d '{
     "api_key": "proj_xxxxxxxxxxxx",
-    "event": "purchase",
+    "event_name": "purchase",
     "session_id": "uuid-here",
     "properties": {"amount": 49, "plan": "pro"}
   }'
@@ -92,6 +93,27 @@ await TgAnalytics.init(
 );
 await TgAnalytics.track('purchase', properties: {'amount': 49});
 ```
+
+### Browser vs. server calls
+
+One `proj_` API key handles both: embed it in your frontend **and** use it from
+your backend — events land in the same project.
+
+The **domain allowlist** (set via `/settings`) is a browser-only guard against
+abuse of the public key embedded in your JS bundle. It works like this:
+
+| Caller | `Origin` header | Behavior |
+|---|---|---|
+| Browser on allowed host | `https://myapp.com` | ✅ accepted |
+| Browser on other host | `https://evil.com` | ❌ 403 |
+| Backend SDK (Python/Node/curl) | *(absent)* | ✅ accepted — API key auth only |
+| Sandboxed iframe / `file://` | `null` | ❌ 403 when allowlist is set |
+
+Allowlist entries support bare hosts (`myapp.com`), full URLs, and wildcards
+(`*.myapp.com` matches any subdomain, but not the apex — add both explicitly
+if you need `myapp.com` and `www.myapp.com`).
+
+An empty allowlist allows all origins.
 
 ### Bot commands
 
@@ -153,6 +175,55 @@ make migrate
 make downgrade
 ```
 
+### Database requirements
+
+- **PostgreSQL ≥ 15**. Required for reliable core `gen_random_uuid()` and
+  JSONB features used by newer migrations.
+- The `pgcrypto` extension is enabled automatically by migration `0004`. On
+  managed Postgres this just works; on self-managed Postgres the role running
+  the first migration needs superuser (or a DBA must pre-enable the extension).
+
+---
+
+## Privacy posture
+
+The server is designed so that self-hosters meet GDPR's data-minimisation
+expectations out of the box, and so the managed version we operate at
+@MyTelegramAnalyticsBot inherits the same protections.
+
+- **Visitor identification.** No cookies, no client-side fingerprinting.
+  Each event is tagged with a 16-character hash of
+  `sha256(daily_salt || project_id || client_ip || user_agent)`. The
+  daily salt rotates every UTC midnight, so the same visitor cannot be
+  re-identified across days. Raw IP and raw User-Agent are never persisted.
+- **User-Agent parsing.** UA strings are parsed by `ua-parser` into
+  `browser`, `os`, and `device_type` (mobile/tablet/desktop/bot/unknown).
+  The raw string is dropped before insertion.
+- **PII tripwire on `properties`.** A small key denylist (email, phone,
+  ssn, password, token, credit_card, card_number, cvv, iban, tax_id)
+  silently drops matching keys at ingestion time and increments an
+  internal counter — the request still returns `202` so a hostile
+  caller cannot probe the rule by watching status codes. Properties
+  larger than 4 KB are zeroed out the same way.
+- **Log redaction.** A root-logger filter masks `proj_<64hex>`,
+  `sk_(live|test)_*` API keys, and inline `email=…` / `password=…`
+  patterns in every emitted log line.
+- **Retention.** A nightly APScheduler job (03:00 UTC) deletes events
+  older than each project's `retention_days`. A value of `0` keeps
+  events forever — the default for self-host.
+- **Audit log.** Destructive actions (project create/delete, settings
+  changes, API-key rotation, suspension) are written to an append-only
+  `audit_events` table. A Postgres trigger rejects UPDATE and DELETE
+  for every row and every role, including the application role itself.
+
+### `REDIS_URL` (optional)
+
+`get_today_salt()` falls back to a process-local cache when `REDIS_URL`
+is unset, which is fine for single-replica self-host. **For multi-replica
+deployments, set `REDIS_URL`** so all replicas share the same daily salt;
+otherwise the same visitor will hash to different IDs depending on which
+replica handled the request.
+
 ---
 
 ## Architecture
@@ -168,6 +239,51 @@ app/
 ```
 
 See [PROJECT.md](../PROJECT.md) for full architecture documentation.
+
+---
+
+## Extension points
+
+The server exposes a small, stable set of hooks in [`app/extensions.py`](app/extensions.py) that downstream packages may use to customize behavior without forking. Three registries are available:
+
+| Hook | Purpose | Cardinality |
+|---|---|---|
+| `register_user_resolver(callable)` | Replace the default singleton User resolver | one (raises if registered twice) |
+| `register_project_pre_create(callable)` | Append a pre-flush quota/policy check | many (run in registration order) |
+| `register_bot_filter(filter)` | Append a bot-handler filter, AND-combined with the admin chat gate | many |
+
+A plugin is any Python module that calls one or more of these from a top-level `register()` function. Plugins are discovered at server startup via two mechanisms (in this order):
+
+1. **Python entry points** in the `tgram_analytics.extensions` group. In your plugin's `pyproject.toml`:
+
+    ```toml
+    [project.entry-points."tgram_analytics.extensions"]
+    my-plugin = "my_plugin:register"
+    ```
+
+2. **`TGA_EXTENSIONS` env var**, comma-separated module paths whose `register()` is called:
+
+    ```bash
+    export TGA_EXTENSIONS=my_plugin,another_plugin
+    uvicorn app.main:app
+    ```
+
+### Extending Settings
+
+To add new env vars to `Settings`, subclass it in your plugin and monkey-patch the class. Pydantic propagates `model_config` automatically, including the `extra="ignore"` policy that lets unknown env vars pass through without error.
+
+```python
+# my_plugin/__init__.py
+from app.core import config as app_config
+
+class ExtendedSettings(app_config.Settings):
+    my_extra_var: str = "default"
+
+def register() -> None:
+    app_config.Settings = ExtendedSettings  # type: ignore[misc]
+```
+
+A working reference plugin lives at [`tests/fixtures/resolver_plugin.py`](tests/fixtures/resolver_plugin.py). For the loader contract see [`app/plugins.py`](app/plugins.py); for the registry surface see [`app/extensions.py`](app/extensions.py).
 
 ---
 
@@ -212,4 +328,19 @@ Please follow the existing code style (ruff-enforced) and keep PRs focused.
 
 ## License
 
-[MIT](LICENSE) — see the file for details.
+[Functional Source License, Version 1.1, ALv2 Future License (FSL-1.1-ALv2)](LICENSE).
+
+In plain language:
+
+- **You can self-host and use this freely** for your own needs — personal,
+  internal business, non-commercial research, professional services.
+- **You cannot resell it as a competing hosted analytics service.** For two
+  years after each release we reserve the right to be the only ones offering
+  this as a commercial managed product.
+- **On the second anniversary of each release, that release automatically
+  relicenses to Apache License 2.0** — fully permissive, forever.
+
+See the [FSL FAQ](https://fsl.software/) for details.
+
+The client SDKs (`tgram-analytics-js`, `-py`, `-dart`) remain under MIT so you
+can ship them with any project.
