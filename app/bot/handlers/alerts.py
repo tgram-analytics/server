@@ -346,12 +346,6 @@ async def handle_text_message(
             await handle_set_allowlist_text(update, session, svc, state)
         return
 
-    if state.flow == "add_funnel":
-        from app.bot.handlers.funnels import handle_funnel_text
-
-        await handle_funnel_text(update, ctx)
-        return
-
     if state.flow != "add_alert":
         return
 

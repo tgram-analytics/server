@@ -81,10 +81,7 @@ async def show_funnels_menu(
 
     rows: list[list[InlineKeyboardButton]] = []
     for f in funnels:
-        steps_preview = " → ".join(f.steps[:3])
-        if len(f.steps) > 3:
-            steps_preview += " → …"
-        label = f"{f.name}  ({steps_preview})"
+        label = f.name if len(f.name) <= 56 else f.name[:53] + "…"
         rows.append([InlineKeyboardButton(label, callback_data=f"fnl_view:{f.id}:30d")])
 
     rows.append([InlineKeyboardButton("➕ Add Funnel", callback_data=f"fnl_add:{project_id_str}")])
@@ -150,90 +147,49 @@ async def funnel_callback(
 
 
 async def _start_add_funnel(query: CallbackQuery, project_id_str: str) -> None:
-    """Step 1: ask for funnel name."""
+    """Step 1: show the event picker directly — no name input required."""
     assert isinstance(query.message, Message)
     chat_id = query.message.chat_id
 
-    factory = get_session_factory()
-    async with factory() as session:
-        svc = BotStateService(session)
-        await svc.save(
-            chat_id,
-            flow="add_funnel",
-            step="name",
-            payload={"project_id": project_id_str},
-        )
-        await session.commit()
-
-    await query.edit_message_text(
-        "🔀 <b>New Funnel</b>\n\nType a name for this funnel:\n\n"
-        "<i>Example: Signup flow, Purchase funnel</i>",
-        parse_mode="HTML",
-    )
-
-
-async def handle_funnel_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Handle text input during funnel creation.
-
-    Returns True if handled, False if not in a funnel flow.
-    """
-    assert update.message is not None
-    text = update.message.text or ""
-    chat_id = update.message.chat_id
+    pid = uuid.UUID(project_id_str)
 
     factory = get_session_factory()
     async with factory() as session:
-        svc = BotStateService(session)
-        state = await svc.get(chat_id)
-
-        if state is None or state.flow != "add_funnel":
-            return False
-
-        if state.step != "name":
-            return False
-
-        name = text.strip()
-        if not name:
-            await update.message.reply_text("❌ Name cannot be empty. Try again:")
-            return True
-
-        payload = state.payload or {}
-        payload["name"] = name
-        project_id_str = payload.get("project_id")
-
-        if not project_id_str:
-            await svc.clear(chat_id)
-            await session.commit()
-            await update.message.reply_text("❌ Session expired. Please start again.")
-            return True
-
-        pid = uuid.UUID(project_id_str)
         events = await list_event_names(session, project_id=pid)
 
-        payload["events"] = []
+        if not events:
+            await query.edit_message_text(
+                "📭 No events recorded yet. Send some events first, then create a funnel.",
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "« Back to funnels",
+                                callback_data=f"back:funnels:{project_id_str}",
+                            )
+                        ]
+                    ]
+                ),
+            )
+            return
+
+        svc = BotStateService(session)
         await svc.save(
             chat_id,
             flow="add_funnel",
             step="events",
-            payload=payload,
+            payload={"project_id": project_id_str, "events": []},
         )
         await session.commit()
 
-    if not events:
-        await update.message.reply_text(
-            "📭 No events recorded yet. Send some events first, then create a funnel."
-        )
-        return True
-
     keyboard = _event_picker_keyboard(events, selected=[])
-    await update.message.reply_text(
-        f"🔀 <b>{html.escape(name)}</b>\n\n"
+    await query.edit_message_text(
+        "🔀 <b>New Funnel</b>\n\n"
         "Tap events in the order users go through them.\n"
         "Selected: <i>none</i>",
         parse_mode="HTML",
         reply_markup=keyboard,
     )
-    return True
 
 
 def _event_picker_keyboard(
@@ -284,12 +240,11 @@ async def _add_event_to_funnel(query: CallbackQuery, event_name: str) -> None:
         await svc.save(chat_id, flow="add_funnel", step="events", payload=payload)
         await session.commit()
 
-    funnel_name = payload.get("name", "Funnel")
     steps_text = " → ".join(html.escape(s) for s in selected) if selected else "<i>none</i>"
     keyboard = _event_picker_keyboard(events, selected)
 
     await query.edit_message_text(
-        f"🔀 <b>{html.escape(funnel_name)}</b>\n\nSelected: {steps_text}\n\nTap more events or press Done.",
+        f"🔀 <b>New Funnel</b>\n\nSelected: {steps_text}\n\nTap more events or press Done.",
         parse_mode="HTML",
         reply_markup=keyboard,
     )
@@ -319,7 +274,6 @@ async def _finalize_events(query: CallbackQuery) -> None:
         await svc.save(chat_id, flow="add_funnel", step="window", payload=payload)
         await session.commit()
 
-    funnel_name = payload.get("name", "Funnel")
     steps_text = " → ".join(html.escape(s) for s in selected)
 
     keyboard = InlineKeyboardMarkup(
@@ -336,7 +290,7 @@ async def _finalize_events(query: CallbackQuery) -> None:
     )
 
     await query.edit_message_text(
-        f"🔀 <b>{html.escape(funnel_name)}</b>\n\n"
+        f"🔀 <b>New Funnel</b>\n\n"
         f"Steps: {steps_text}\n\n"
         "How long should a user have to complete the funnel?",
         parse_mode="HTML",
@@ -367,7 +321,6 @@ async def _pick_time_window(
 
         payload = state.payload or {}
         project_id_str = payload.get("project_id")
-        funnel_name = payload.get("name", "Funnel")
         steps: list[str] = payload.get("events", [])
 
         if not project_id_str or len(steps) < 2:
@@ -376,6 +329,7 @@ async def _pick_time_window(
             await query.edit_message_text("❌ Invalid state. Please start again.")
             return
 
+        funnel_name = " → ".join(steps)
         pid = uuid.UUID(project_id_str)
         funnel = await create_funnel(
             session,
