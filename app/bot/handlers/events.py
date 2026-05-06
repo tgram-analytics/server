@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Any, TypedDict
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import (
@@ -267,20 +268,23 @@ def _format_relative(now: datetime, ts: datetime) -> str:
     return f"{secs // 86400}d ago"
 
 
-def _group_consecutive(
-    events: list[dict[str, object]],
-) -> list[dict[str, object]]:
+class _HistoryGroup(TypedDict):
+    event_name: str
+    count: int
+    latest: datetime
+
+
+def _group_consecutive(events: list[dict[str, Any]]) -> list[_HistoryGroup]:
     """Run-length encode consecutive events with the same name.
 
-    Returns ``[{"event_name": str, "count": int, "latest": datetime}, ...]``
-    preserving input order.
+    Returns groups preserving input order.
     """
-    grouped: list[dict[str, object]] = []
+    grouped: list[_HistoryGroup] = []
     for evt in events:
-        name = evt["event_name"]
-        ts = evt["timestamp"]
+        name: str = evt["event_name"]
+        ts: datetime = evt["timestamp"]
         if grouped and grouped[-1]["event_name"] == name:
-            grouped[-1]["count"] = int(grouped[-1]["count"]) + 1  # type: ignore[arg-type]
+            grouped[-1]["count"] += 1
         else:
             grouped.append({"event_name": name, "count": 1, "latest": ts})
     return grouped
@@ -326,9 +330,9 @@ async def show_history_menu(
         "─────────────────",
     ]
     for g in groups:
-        name = html.escape(str(g["event_name"]))
-        count = int(g["count"])  # type: ignore[arg-type]
-        rel = _format_relative(now, g["latest"])  # type: ignore[arg-type]
+        name = html.escape(g["event_name"])
+        count = g["count"]
+        rel = _format_relative(now, g["latest"])
         prefix = f"<b>({count})</b> " if count > 1 else ""
         lines.append(f"{prefix}{name}  <i>· {rel}</i>")
 
