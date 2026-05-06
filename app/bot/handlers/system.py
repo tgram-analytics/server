@@ -16,6 +16,7 @@ _HELP_TEXT = (
     "/projects — list all your projects\n"
     "/events — browse event types for a project\n"
     "/report [event] — send a chart for an event (7d / 30d / 90d, day / week)\n"
+    "/digest — weekly summary (events, sessions, top events, deltas) across all projects\n"
     "/alerts — list all active alerts across all projects\n"
     "/help — show this message\n"
     "/cancel — cancel the current operation\n\n"
