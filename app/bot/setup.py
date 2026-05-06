@@ -33,6 +33,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     from the configured admin chat ID only.
     """
     from app.bot.handlers.alerts import alert_callback, alerts_command, handle_text_message
+    from app.bot.handlers.digest import digest_command
     from app.bot.handlers.events import events_callback, events_command
     from app.bot.handlers.funnels import funnel_callback
     from app.bot.handlers.onboarding import onboarding_callback
@@ -75,6 +76,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     app.add_handler(CommandHandler("projects", projects_command, filters=admin_filter))
     app.add_handler(CommandHandler("events", events_command, filters=admin_filter))
     app.add_handler(CommandHandler("report", report_command, filters=admin_filter))
+    app.add_handler(CommandHandler("digest", digest_command, filters=admin_filter))
     app.add_handler(CommandHandler("alerts", alerts_command, filters=admin_filter))
 
     # Callback queries don't support CommandHandler filters directly — we
@@ -133,6 +135,7 @@ async def init_bot(token: str, admin_chat_id: int, webhook_base_url: str = "") -
             BotCommand("projects", "List your projects"),
             BotCommand("events", "Browse event types"),
             BotCommand("report", "Chart for an event"),
+            BotCommand("digest", "Weekly digest across all projects"),
             BotCommand("alerts", "List active alerts"),
             BotCommand("add", "Create a new project"),
             BotCommand("help", "Show help"),
