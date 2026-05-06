@@ -173,6 +173,25 @@ async def list_event_names(
     ]
 
 
+async def list_recent_events(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Return the most recent *limit* events for a project, newest first.
+
+    Returns ``[{"event_name": str, "timestamp": datetime}, ...]``.
+    """
+    result = await session.execute(
+        select(Event.event_name, Event.received_at)
+        .where(Event.project_id == project_id)
+        .order_by(Event.received_at.desc())
+        .limit(limit)
+    )
+    return [{"event_name": r.event_name, "timestamp": r.received_at} for r in result]
+
+
 async def list_property_keys(
     session: AsyncSession,
     *,
