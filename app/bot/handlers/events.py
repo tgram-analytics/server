@@ -29,6 +29,7 @@ from app.services.analytics import (
     events_over_time,
     list_event_names,
     list_property_keys,
+    list_recent_events,
     top_properties,
 )
 from app.services.charts import (
@@ -245,6 +246,97 @@ async def _show_events_list_from_state(query: CallbackQuery, owner_user_id: uuid
         return
 
     await show_events_menu(query, project_id_str, owner_user_id)
+
+
+# ── History (recent activity) ──────────────────────────────────────────────────
+
+
+_HISTORY_LIMIT = 50
+
+
+def _format_relative(now: datetime, ts: datetime) -> str:
+    """Compact relative time: '3s', '5m', '2h', '4d'."""
+    delta = now - ts
+    secs = int(delta.total_seconds())
+    if secs < 60:
+        return f"{max(secs, 0)}s ago"
+    if secs < 3600:
+        return f"{secs // 60}m ago"
+    if secs < 86400:
+        return f"{secs // 3600}h ago"
+    return f"{secs // 86400}d ago"
+
+
+def _group_consecutive(
+    events: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Run-length encode consecutive events with the same name.
+
+    Returns ``[{"event_name": str, "count": int, "latest": datetime}, ...]``
+    preserving input order.
+    """
+    grouped: list[dict[str, object]] = []
+    for evt in events:
+        name = evt["event_name"]
+        ts = evt["timestamp"]
+        if grouped and grouped[-1]["event_name"] == name:
+            grouped[-1]["count"] = int(grouped[-1]["count"]) + 1  # type: ignore[arg-type]
+        else:
+            grouped.append({"event_name": name, "count": 1, "latest": ts})
+    return grouped
+
+
+async def show_history_menu(
+    query: CallbackQuery, project_id_str: str, owner_user_id: uuid.UUID
+) -> None:
+    """Show the last N events for a project, grouping consecutive duplicates."""
+    assert isinstance(query.message, Message)
+    pid = uuid.UUID(project_id_str)
+
+    factory = get_session_factory()
+    async with factory() as session:
+        project = await get_project(session, pid, owner_user_id)
+        if project is None:
+            await query.edit_message_text("❌ Project not found.")
+            return
+
+        events = await list_recent_events(session, project_id=pid, limit=_HISTORY_LIMIT)
+
+    keyboard = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("🔄 Refresh", callback_data=f"menu:history:{project_id_str}")],
+            [InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")],
+        ]
+    )
+
+    if not events:
+        await query.edit_message_text(
+            f"🕘 <b>{html.escape(project.name)}</b> — no events received yet.",
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+        return
+
+    now = datetime.now(UTC)
+    groups = _group_consecutive(events)
+
+    lines = [
+        f"🕘 <b>Recent activity — {html.escape(project.name)}</b>",
+        f"<i>last {len(events)} event{'s' if len(events) != 1 else ''}</i>",
+        "─────────────────",
+    ]
+    for g in groups:
+        name = html.escape(str(g["event_name"]))
+        count = int(g["count"])  # type: ignore[arg-type]
+        rel = _format_relative(now, g["latest"])  # type: ignore[arg-type]
+        prefix = f"<b>({count})</b> " if count > 1 else ""
+        lines.append(f"{prefix}{name}  <i>· {rel}</i>")
+
+    await query.edit_message_text(
+        "\n".join(lines),
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
 
 
 # ── Event detail ───────────────────────────────────────────────────────────────

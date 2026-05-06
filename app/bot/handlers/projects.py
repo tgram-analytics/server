@@ -12,7 +12,7 @@ from telegram.ext import ContextTypes
 from app.bot.auth import requires_user
 from app.bot.constants import escape_photo
 from app.bot.handlers.alerts import show_alerts_menu
-from app.bot.handlers.events import show_events_menu
+from app.bot.handlers.events import show_events_menu, show_history_menu
 from app.bot.handlers.funnels import show_funnels_menu
 from app.bot.handlers.reports import (
     handle_report_project_pick,
@@ -166,6 +166,10 @@ async def project_callback(
     elif data.startswith("menu:events:"):
         project_id_str = data[12:]
         await show_events_menu(await escape_photo(query), project_id_str, owner_user_id)
+
+    elif data.startswith("menu:history:"):
+        project_id_str = data[13:]
+        await show_history_menu(await escape_photo(query), project_id_str, owner_user_id)
 
     elif data.startswith("menu:alerts:"):
         project_id_str = data[12:]
@@ -372,13 +376,16 @@ async def _show_project_menu(
                 InlineKeyboardButton("📈 Reports", callback_data=f"menu:reports:{project_id_str}"),
             ],
             [
+                InlineKeyboardButton("🕘 History", callback_data=f"menu:history:{project_id_str}"),
                 InlineKeyboardButton(
                     "👥 Visitors", callback_data=f"menu:visitors:{project_id_str}"
                 ),
-                InlineKeyboardButton("🔔 Alerts", callback_data=f"menu:alerts:{project_id_str}"),
             ],
             [
+                InlineKeyboardButton("🔔 Alerts", callback_data=f"menu:alerts:{project_id_str}"),
                 InlineKeyboardButton("🔀 Funnels", callback_data=f"menu:funnels:{project_id_str}"),
+            ],
+            [
                 InlineKeyboardButton("⚙️ Settings", callback_data=f"menu:settings:{project_id_str}"),
             ],
             [
