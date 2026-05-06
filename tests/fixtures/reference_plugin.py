@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
+from fastapi import APIRouter
 from telegram.ext import filters
 
 # State exposed for inspection by tests.
@@ -85,6 +86,14 @@ def register() -> None:
     ext.register_user_resolver(reference_resolver)
     ext.register_project_pre_create(reject_forbidden_names)
     ext.register_bot_filter(_CountingFilter())
+
+    router = APIRouter()
+
+    @router.get("/ping")
+    async def _ping() -> dict[str, bool]:
+        return {"ok": True}
+
+    ext.register_http_router("/_test", router)
 
     # Settings extension: subclass and monkey-patch.
     from app.core import config as app_config

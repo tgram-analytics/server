@@ -168,9 +168,11 @@ def test_public_surface_is_stable() -> None:
         "register_user_resolver",
         "register_project_pre_create",
         "register_bot_filter",
+        "register_http_router",
         "get_user_resolver",
         "get_project_pre_create_hooks",
         "get_bot_filters",
+        "get_registered_http_routers",
     }
     actual_public = {name for name in vars(ext) if not name.startswith("_")}
     # Allow imports to leak in but require all expected names present.

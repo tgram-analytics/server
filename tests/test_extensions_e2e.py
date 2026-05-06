@@ -197,6 +197,45 @@ def test_settings_extended_with_extra_field(loaded_reference_plugin) -> None:
     assert fields["reference_plugin_extra"].default == "default-value"
 
 
+# ── HTTP router hook ──────────────────────────────────────────────────────────
+
+
+async def test_register_http_router_mounts_routes(loaded_reference_plugin) -> None:
+    """A plugin-registered APIRouter is mounted at its prefix during lifespan."""
+    from collections.abc import AsyncGenerator
+    from contextlib import asynccontextmanager
+
+    from fastapi import APIRouter, FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from app.main import create_app
+
+    @asynccontextmanager
+    async def mount_only_lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        # Skip DB/Redis/bot init; only exercise the router-mount step that
+        # the real lifespan performs after load_plugins().
+        for prefix, router_or_app, _child_lifespan in ext.get_registered_http_routers():
+            if isinstance(router_or_app, APIRouter):
+                app.include_router(router_or_app, prefix=prefix)
+            else:
+                app.mount(prefix, router_or_app)
+        yield
+
+    test_app = create_app()
+    test_app.router.lifespan_context = mount_only_lifespan  # type: ignore[assignment]
+
+    # ASGITransport does not run ASGI lifespan messages, so invoke the
+    # lifespan context-manager directly to exercise the mount logic.
+    async with (
+        mount_only_lifespan(test_app),
+        AsyncClient(transport=ASGITransport(app=test_app), base_url="http://testserver") as client,
+    ):
+        resp = await client.get("/_test/ping")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+
 # ── Public surface end-to-end ─────────────────────────────────────────────────
 
 
