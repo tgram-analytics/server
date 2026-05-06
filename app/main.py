@@ -2,9 +2,9 @@
 
 import logging
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as health_router
@@ -16,6 +16,7 @@ from app.core.config import get_settings
 from app.core.database import close_db, init_db
 from app.core.privacy import RedactingFilter
 from app.core.redis_client import close_redis, init_redis
+from app.extensions import get_registered_http_routers
 from app.jobs.scheduler import shutdown_scheduler, start_scheduler
 from app.plugins import load_plugins
 
@@ -32,13 +33,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # may register a user resolver that init_bot's singleton bootstrap
     # would otherwise be the sole source of truth for.
     load_plugins()
-    await init_bot(
-        token=settings.telegram_bot_token,
-        admin_chat_id=settings.admin_chat_id,
-        webhook_base_url=settings.webhook_base_url,
-    )
-    yield
-    await shutdown_bot()
+    # Mount any HTTP routers/ASGI apps registered by plugins. APIRouter
+    # instances merge cleanly into the main app's OpenAPI; anything else
+    # is mounted as an ASGI sub-app. Each plugin may also supply an async
+    # context-manager lifespan that we compose with ours via AsyncExitStack
+    # so child resources unwind on shutdown.
+    async with AsyncExitStack() as stack:
+        for prefix, router_or_app, child_lifespan in get_registered_http_routers():
+            if isinstance(router_or_app, APIRouter):
+                app.include_router(router_or_app, prefix=prefix)
+            else:
+                app.mount(prefix, router_or_app)
+            if child_lifespan is not None:
+                await stack.enter_async_context(child_lifespan(app))
+        await init_bot(
+            token=settings.telegram_bot_token,
+            admin_chat_id=settings.admin_chat_id,
+            webhook_base_url=settings.webhook_base_url,
+        )
+        yield
+        await shutdown_bot()
     await shutdown_scheduler()
     await close_redis()
     await close_db()

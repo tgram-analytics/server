@@ -25,7 +25,8 @@ sites use to consume the registry. The accessors return immutable views
 
 from __future__ import annotations
 
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
@@ -95,6 +96,7 @@ PROJECT_SETTINGS_OVERRIDABLE_FIELDS: frozenset[str] = frozenset({"retention_days
 _user_resolver: UserResolver | None = None
 _project_pre_create: list[ProjectPreCreate] = []
 _bot_filters: list[ptb_filters.BaseFilter] = []
+_http_routers: list[tuple[str, Any, Callable[[Any], AbstractAsyncContextManager[None]] | None]] = []
 
 
 def register_user_resolver(resolver: UserResolver) -> None:
@@ -129,6 +131,25 @@ def register_bot_filter(f: ptb_filters.BaseFilter) -> None:
     _bot_filters.append(f)
 
 
+def register_http_router(
+    prefix: str,
+    router_or_app: Any,
+    *,
+    lifespan: Callable[[Any], AbstractAsyncContextManager[None]] | None = None,
+) -> None:
+    """Register a FastAPI ``APIRouter`` (or any ASGI app) to mount on startup.
+
+    Mounted inside the FastAPI ``lifespan`` after ``load_plugins()`` runs:
+    a FastAPI ``APIRouter`` is attached via ``app.include_router(..., prefix=prefix)``;
+    anything else is attached via ``app.mount(prefix, ...)``.
+
+    If ``lifespan`` is provided, it is an async context manager factory taking
+    the FastAPI ``app`` and is composed with the main app lifespan via an
+    :class:`~contextlib.AsyncExitStack` so child resources unwind on shutdown.
+    """
+    _http_routers.append((prefix, router_or_app, lifespan))
+
+
 def get_user_resolver() -> UserResolver | None:
     """Return the registered user resolver, or ``None`` for the default."""
     return _user_resolver
@@ -144,6 +165,13 @@ def get_bot_filters() -> tuple[ptb_filters.BaseFilter, ...]:
     return tuple(_bot_filters)
 
 
+def get_registered_http_routers() -> tuple[
+    tuple[str, Any, Callable[[Any], AbstractAsyncContextManager[None]] | None], ...
+]:
+    """Return all registered HTTP routers as ``(prefix, router_or_app, lifespan)`` tuples."""
+    return tuple(_http_routers)
+
+
 def _reset_for_tests() -> None:
     """Test-only: clear all registries between tests.
 
@@ -153,3 +181,4 @@ def _reset_for_tests() -> None:
     _user_resolver = None
     _project_pre_create.clear()
     _bot_filters.clear()
+    _http_routers.clear()
