@@ -37,6 +37,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     from app.bot.handlers.events import events_callback, events_command
     from app.bot.handlers.funnels import funnel_callback
     from app.bot.handlers.onboarding import onboarding_callback
+    from app.bot.handlers.overview import overview_command
     from app.bot.handlers.projects import add_command, project_callback, projects_command
     from app.bot.handlers.reports import report_command
     from app.bot.handlers.system import cancel_command, help_command, start_command
@@ -77,6 +78,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     app.add_handler(CommandHandler("events", events_command, filters=admin_filter))
     app.add_handler(CommandHandler("report", report_command, filters=admin_filter))
     app.add_handler(CommandHandler("digest", digest_command, filters=admin_filter))
+    app.add_handler(CommandHandler("overview", overview_command, filters=admin_filter))
     app.add_handler(CommandHandler("alerts", alerts_command, filters=admin_filter))
 
     # Callback queries don't support CommandHandler filters directly — we
@@ -136,6 +138,7 @@ async def init_bot(token: str, admin_chat_id: int, webhook_base_url: str = "") -
             BotCommand("events", "Browse event types"),
             BotCommand("report", "Chart for an event"),
             BotCommand("digest", "Weekly digest across all projects"),
+            BotCommand("overview", "Visits chart across all projects"),
             BotCommand("alerts", "List active alerts"),
             BotCommand("add", "Create a new project"),
             BotCommand("help", "Show help"),
