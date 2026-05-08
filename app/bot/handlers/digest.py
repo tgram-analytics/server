@@ -5,12 +5,13 @@ from __future__ import annotations
 import html
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from app.bot.auth import requires_user
+from app.models.alert import Alert
 from app.models.event import Event
 from app.models.project import Project
 from app.models.user import User
@@ -37,26 +38,6 @@ async def _project_digest_lines(
     week_ago = now - timedelta(days=7)
     two_weeks_ago = now - timedelta(days=14)
 
-    total_curr = (
-        await session.execute(
-            select(func.count())
-            .select_from(Event)
-            .where(Event.project_id == project.id, Event.timestamp >= week_ago)
-        )
-    ).scalar_one()
-
-    total_prev = (
-        await session.execute(
-            select(func.count())
-            .select_from(Event)
-            .where(
-                Event.project_id == project.id,
-                Event.timestamp >= two_weeks_ago,
-                Event.timestamp < week_ago,
-            )
-        )
-    ).scalar_one()
-
     sessions_curr = (
         await session.execute(
             select(func.count(func.distinct(Event.session_id)))
@@ -77,28 +58,59 @@ async def _project_digest_lines(
         )
     ).scalar_one()
 
-    top_events = (
-        await session.execute(
-            select(Event.event_name, func.count().label("cnt"))
-            .where(Event.project_id == project.id, Event.timestamp >= week_ago)
-            .group_by(Event.event_name)
-            .order_by(func.count().desc())
-            .limit(3)
-        )
-    ).all()
+    alerted_names = list(
+        (
+            await session.execute(
+                select(Alert.event_name)
+                .where(Alert.project_id == project.id, Alert.is_active.is_(True))
+                .distinct()
+            )
+        ).scalars()
+    )
 
     lines = [
         f"📦 <b>{html.escape(project.name)}</b>",
-        f"  📊 Events: <b>{total_curr:,}</b>  {_format_delta(total_curr, total_prev)}",
         f"  👤 Sessions: <b>{sessions_curr:,}</b>  {_format_delta(sessions_curr, sessions_prev)}",
     ]
-    if top_events:
-        top_str = ", ".join(
-            f"{html.escape(row.event_name)} (<b>{row.cnt:,}</b>)" for row in top_events
+
+    if not alerted_names:
+        lines.append("  💤 No alerts — set one with /alerts to track core events")
+        return lines
+
+    counts_rows = (
+        await session.execute(
+            select(
+                Event.event_name,
+                func.sum(case((Event.timestamp >= week_ago, 1), else_=0)).label("curr"),
+                func.sum(
+                    case(
+                        (
+                            (Event.timestamp >= two_weeks_ago) & (Event.timestamp < week_ago),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ).label("prev"),
+            )
+            .where(
+                Event.project_id == project.id,
+                Event.event_name.in_(alerted_names),
+                Event.timestamp >= two_weeks_ago,
+            )
+            .group_by(Event.event_name)
         )
-        lines.append(f"  🏷 Top: {top_str}")
-    else:
-        lines.append("  <i>no events this week</i>")
+    ).all()
+
+    counts: dict[str, tuple[int, int]] = {
+        row.event_name: (int(row.curr or 0), int(row.prev or 0)) for row in counts_rows
+    }
+
+    rows = [(name, *counts.get(name, (0, 0))) for name in alerted_names]
+    rows.sort(key=lambda r: (-r[1], r[0]))
+
+    for name, curr, prev in rows:
+        lines.append(f"  🎯 {html.escape(name)}: <b>{curr:,}</b>  {_format_delta(curr, prev)}")
+
     return lines
 
 
