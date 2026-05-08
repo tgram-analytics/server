@@ -14,6 +14,7 @@ from app.bot.constants import escape_photo
 from app.bot.handlers.alerts import show_alerts_menu
 from app.bot.handlers.events import show_events_menu, show_history_menu
 from app.bot.handlers.funnels import show_funnels_menu
+from app.bot.handlers.overview import update_overview_period
 from app.bot.handlers.reports import (
     handle_report_project_pick,
     send_chart_photo,
@@ -226,6 +227,10 @@ async def project_callback(
             await send_visitors_chart(
                 query, parts[0], owner_user_id, dimension=parts[1], period=parts[2]
             )
+
+    elif data.startswith("ovw_prd:"):
+        # ovw_prd:{period}
+        await update_overview_period(query, owner_user_id, period=data[8:])
 
     elif data.startswith("vis_line:"):
         # vis_line:{project_id}:{period}

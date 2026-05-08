@@ -148,6 +148,57 @@ _BAR_COLORS = [
 ]
 
 
+async def generate_multi_line_chart(
+    series: list[dict[str, Any]],
+    *,
+    title: str,
+    period_label: str,
+    quickchart_url: str = "http://quickchart:3400",
+) -> bytes:
+    """Generate a multi-series line chart and return PNG bytes.
+
+    *series* is a list of ``{"label": str, "data": [{"bucket": datetime, "count": int}]}``.
+    All series should share the same bucket cadence; the longest one supplies
+    the x-axis labels.
+    """
+    primary = max(series, key=lambda s: len(s["data"])) if series else {"data": []}
+    labels = [_fmt_date(row["bucket"]) for row in primary["data"]]
+
+    datasets = []
+    for i, s in enumerate(series):
+        color = _BAR_COLORS[i % len(_BAR_COLORS)]
+        datasets.append(
+            {
+                "label": s["label"],
+                "data": [r["count"] for r in s["data"]],
+                "borderColor": color,
+                "backgroundColor": color,
+                "fill": False,
+                "tension": 0,
+                "pointRadius": 3,
+                "pointBackgroundColor": color,
+            }
+        )
+
+    config: dict[str, Any] = {
+        "type": "line",
+        "data": {"labels": labels, "datasets": datasets},
+        "options": {
+            "plugins": {
+                "title": {"display": True, "text": f"{title} — {period_label}"},
+                "legend": {"display": True},
+            },
+            "scales": {
+                "y": {
+                    "beginAtZero": True,
+                    "ticks": {"precision": 0},
+                },
+            },
+        },
+    }
+    return await _post_chart(config, quickchart_url)
+
+
 async def generate_bar_chart(
     data: list[dict[str, Any]],
     *,
