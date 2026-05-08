@@ -49,6 +49,33 @@ class Settings(BaseSettings):
     # cannot be raised above the cap on the next user edit.
     max_retention_days: int | None = None
 
+    # ── Sentry (optional error tracking) ──────────────────────────────────
+    # Set ``SENTRY_DSN`` to enable error reporting. ``sentry-sdk`` ships as
+    # a base dependency so self-hosted Docker / pip installs only need to
+    # set the DSN to opt in. With the DSN unset, init is a silent no-op
+    # (no network, no overhead).
+    sentry_dsn: str | None = None
+    sentry_environment: str | None = None
+    # 0.0 disables performance tracing (errors only). Bump to e.g. 0.1 to
+    # sample 10% of transactions in production.
+    sentry_traces_sample_rate: float = 0.0
+    # Profiles are sampled as a fraction of *traced* transactions.
+    sentry_profiles_sample_rate: float = 0.0
+    # Optional release identifier. Falls back to the package version
+    # (defined in pyproject.toml) when unset; supply a commit SHA in CI for
+    # commit-resolution and source-map links.
+    sentry_release: str | None = None
+    # Optional human-readable name for the running instance. Useful when
+    # multiple deployments share one Sentry project (e.g. "prod-eu",
+    # "staging"). Defaults to the OS hostname when unset.
+    sentry_server_name: str | None = None
+    # Minimum log level forwarded to Sentry as breadcrumbs. WARNING+ becomes
+    # an event automatically; below that is recorded as breadcrumb context.
+    sentry_log_level: str = "INFO"
+    # Forward request bodies and IP addresses to Sentry. Off by default to
+    # avoid leaking analytics payloads / visitor IPs to a third party.
+    sentry_send_default_pii: bool = False
+
     # ── Redis ─────────────────────────────────────────────────────────────
     # Optional. Required only for multi-replica deployments where the daily
     # visitor-hash salt (and, in later phases, the rate limiter) must be

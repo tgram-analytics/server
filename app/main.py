@@ -16,6 +16,7 @@ from app.core.config import get_settings
 from app.core.database import close_db, init_db
 from app.core.privacy import RedactingFilter
 from app.core.redis_client import close_redis, init_redis
+from app.core.sentry import init_sentry
 from app.extensions import get_registered_http_routers
 from app.jobs.scheduler import shutdown_scheduler, start_scheduler
 from app.plugins import load_plugins
@@ -67,6 +68,11 @@ def create_app() -> FastAPI:
     root_logger = logging.getLogger()
     if not any(isinstance(f, RedactingFilter) for f in root_logger.filters):
         root_logger.addFilter(RedactingFilter())
+
+    # Initialise Sentry before FastAPI() so its ASGI/HTTPX/SQLAlchemy
+    # auto-integrations attach to the app and outbound clients. No-op when
+    # SENTRY_DSN is unset or sentry-sdk is not installed.
+    init_sentry(get_settings())
 
     app = FastAPI(
         title="tgram-analytics",
