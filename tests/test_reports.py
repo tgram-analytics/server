@@ -148,9 +148,7 @@ async def test_send_chart_photo_no_data(session_factory, singleton_user):
     query.message = MagicMock(spec=Message)
     query.message.reply_photo = AsyncMock()
 
-    with patch("app.bot.handlers.reports.get_settings") as mock_cfg:
-        mock_cfg.return_value.quickchart_url = "http://quickchart:3400"
-        await send_chart_photo(query, pid, singleton_user.id)
+    await send_chart_photo(query, pid, singleton_user.id)
 
     query.edit_message_text.assert_called_once()
     text = query.edit_message_text.call_args[0][0]
@@ -190,13 +188,10 @@ async def test_send_chart_photo_quickchart_unavailable(session_factory, singleto
     query.message = MagicMock(spec=Message)
     query.message.reply_photo = AsyncMock()
 
-    with (
-        patch("app.bot.handlers.reports.get_settings") as mock_cfg,
-        patch(
-            "app.bot.handlers.reports.generate_line_chart", side_effect=ChartGenerationError("down")
-        ),
+    with patch(
+        "app.bot.handlers.reports.generate_line_chart",
+        side_effect=ChartGenerationError("down"),
     ):
-        mock_cfg.return_value.quickchart_url = "http://quickchart:3400"
         await send_chart_photo(query, str(pid), singleton_user.id)
 
     text = query.edit_message_text.call_args[0][0]
@@ -237,11 +232,7 @@ async def test_send_chart_photo_success(session_factory, singleton_user):
 
     fake_png = b"\x89PNG\r\n\x1a\nfakepng"
 
-    with (
-        patch("app.bot.handlers.reports.get_settings") as mock_cfg,
-        patch("app.bot.handlers.reports.generate_line_chart", return_value=fake_png) as mock_chart,
-    ):
-        mock_cfg.return_value.quickchart_url = "http://quickchart:3400"
+    with patch("app.bot.handlers.reports.generate_line_chart", return_value=fake_png) as mock_chart:
         await send_chart_photo(query, str(pid), singleton_user.id)
 
     mock_chart.assert_called_once()

@@ -15,7 +15,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.bot.constants import PERIOD_LABEL, PERIODS
-from app.core.config import get_settings
 from app.core.database import get_session_factory
 from app.services.analytics import events_over_time, top_properties
 from app.services.charts import (
@@ -169,7 +168,6 @@ async def send_visitors_chart(
     delta = PERIODS.get(period, PERIODS["7d"])
     start = now - delta
     period_label = PERIOD_LABEL.get(period, period)
-    settings = get_settings()
 
     # Find the display label for the dimension.
     dim_label = next(label for key, _e, label in _DIMENSIONS if key == dimension)
@@ -209,7 +207,6 @@ async def send_visitors_chart(
         png_bytes = await generate_bar_chart(
             rows,
             title=f"{dim_label} — {period_label}",
-            quickchart_url=settings.quickchart_url,
         )
     except ChartGenerationError:
         await query.answer("⚠️ Chart service unavailable.", show_alert=True)
@@ -251,7 +248,6 @@ async def send_visitors_line_chart(
     start = now - delta
     period_label = PERIOD_LABEL.get(period, period)
     gran = "week" if period == "90d" else "day"
-    settings = get_settings()
 
     factory = get_session_factory()
     async with factory() as session:
@@ -288,7 +284,6 @@ async def send_visitors_line_chart(
             data,
             title="Visits",
             period_label=period_label,
-            quickchart_url=settings.quickchart_url,
         )
     except ChartGenerationError:
         await query.answer("⚠️ Chart service unavailable.", show_alert=True)

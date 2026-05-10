@@ -19,7 +19,6 @@ from telegram.ext import ContextTypes
 
 from app.bot.auth import requires_user
 from app.bot.constants import PERIOD_LABEL, PERIODS
-from app.core.config import get_settings
 from app.core.database import get_session_factory
 from app.models.project import Project
 from app.models.user import User
@@ -73,12 +72,10 @@ async def _render_chart(
     series: list[dict[str, Any]],
     period: str,
 ) -> bytes:
-    settings = get_settings()
     return await generate_multi_line_chart(
         series,
         title="Visits",
         period_label=PERIOD_LABEL.get(period, period),
-        quickchart_url=settings.quickchart_url,
     )
 
 
