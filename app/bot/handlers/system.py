@@ -18,6 +18,7 @@ _HELP_TEXT = (
     "/report [event] — send a chart for an event (7d / 30d / 90d, day / week)\n"
     "/digest — weekly summary (events, sessions, top events, deltas) across all projects\n"
     "/alerts — list all active alerts across all projects\n"
+    "/doctor — run a health check across all your projects\n"
     "/help — show this message\n"
     "/cancel — cancel the current operation\n\n"
     "💡 <b>Tip:</b> Charts support period switching and period-over-period comparison"

@@ -34,6 +34,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     """
     from app.bot.handlers.alerts import alert_callback, alerts_command, handle_text_message
     from app.bot.handlers.digest import digest_command
+    from app.bot.handlers.doctor import doctor_command
     from app.bot.handlers.events import events_callback, events_command
     from app.bot.handlers.funnels import funnel_callback
     from app.bot.handlers.onboarding import onboarding_callback
@@ -80,6 +81,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     app.add_handler(CommandHandler("digest", digest_command, filters=admin_filter))
     app.add_handler(CommandHandler("overview", overview_command, filters=admin_filter))
     app.add_handler(CommandHandler("alerts", alerts_command, filters=admin_filter))
+    app.add_handler(CommandHandler("doctor", doctor_command, filters=admin_filter))
 
     # Callback queries don't support CommandHandler filters directly — we
     # guard inside the handler using the same admin_chat_id check.
@@ -141,6 +143,7 @@ async def init_bot(token: str, admin_chat_id: int, webhook_base_url: str = "") -
             BotCommand("overview", "Visits chart across all projects"),
             BotCommand("alerts", "List active alerts"),
             BotCommand("add", "Create a new project"),
+            BotCommand("doctor", "Health check across all projects"),
             BotCommand("help", "Show help"),
             BotCommand("cancel", "Cancel current operation"),
         ]
