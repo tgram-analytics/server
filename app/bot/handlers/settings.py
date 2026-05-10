@@ -16,6 +16,7 @@ from app.models.bot_conversation_state import BotConversationState
 from app.models.project import Project
 from app.models.settings import ProjectSettings
 from app.services.audit import write_audit
+from app.services.events import normalize_origin_entries
 from app.services.projects import get_project
 
 # ── Menu display ──────────────────────────────────────────────────────────────
@@ -299,7 +300,7 @@ async def handle_set_allowlist_text(
         await update.message.reply_text("❌ Invalid project reference. Please start over.")
         return
 
-    domains = [d.strip() for d in raw.split(",") if d.strip()]
+    domains = normalize_origin_entries(raw.split(","))
 
     await session.execute(
         sql_update(Project).where(Project.id == pid).values(domain_allowlist=domains)

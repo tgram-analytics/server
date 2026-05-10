@@ -252,6 +252,45 @@ async def test_set_allowlist_updates_project(session_factory, singleton_user):
         assert "api.myapp.com" in p.domain_allowlist
 
 
+async def test_set_allowlist_normalizes_input(session_factory, singleton_user):
+    """Mixed scheme/casing/duplicates are collapsed to bare hosts on save."""
+    from sqlalchemy import select
+
+    from app.bot.handlers.alerts import handle_text_message
+    from app.bot.states import BotStateService
+    from app.models.project import Project
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="normalize.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        await session.commit()
+        pid = str(project.id)
+
+        svc = BotStateService(session)
+        await svc.save(ADMIN_ID, flow="set_allowlist", step="value", payload={"project_id": pid})
+        await session.commit()
+
+    update, ctx = _make_message(
+        chat_id=ADMIN_ID,
+        text="https://Foo.com/, foo.com, https://api.foo.com/path, *.staging.foo.com",
+    )
+    await handle_text_message(update, ctx)
+
+    async with session_factory() as session:
+        result = await session.execute(select(Project).where(Project.id == uuid.UUID(pid)))
+        p = result.scalar_one()
+        assert list(p.domain_allowlist) == [
+            "foo.com",
+            "api.foo.com",
+            "*.staging.foo.com",
+        ]
+
+
 async def test_allow_all_button_clears_allowlist(session_factory, singleton_user):
     """Pressing 'Allow all' button clears the allowlist."""
     from sqlalchemy import select

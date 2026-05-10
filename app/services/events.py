@@ -111,6 +111,55 @@ async def evaluate_alerts(
     return fired
 
 
+def normalize_origin_entry(entry: str) -> str | None:
+    """Normalize a user-supplied allowlist entry to a bare host[:port].
+
+    Accepts inputs like ``https://example.com/``, ``example.com``,
+    ``HTTP://Example.com:8080``, or ``*.example.com`` and returns a
+    canonical ``example.com`` / ``example.com:8080`` / ``*.example.com``.
+
+    Returns ``None`` for empty or malformed input — callers should drop
+    those rather than store them.
+    """
+    from urllib.parse import urlparse
+
+    s = (entry or "").strip().lower()
+    if not s:
+        return None
+
+    # Preserve the wildcard prefix; normalize the suffix as a host.
+    wildcard = s.startswith("*.")
+    if wildcard:
+        s = s[2:]
+        if not s:
+            return None
+
+    # If the input looks like a URL, take its netloc; otherwise treat the
+    # whole string as a host. ``urlparse`` only populates ``netloc`` when a
+    # scheme is present, so prepend one for the bare-host case.
+    parsed = urlparse(s if "://" in s else f"//{s}", scheme="")
+    host = parsed.netloc or parsed.path or ""
+    # urlparse with "//host/path" puts host in netloc; strip any path/slash.
+    host = host.split("/", 1)[0].strip()
+    if not host:
+        return None
+
+    return f"*.{host}" if wildcard else host
+
+
+def normalize_origin_entries(entries: list[str]) -> list[str]:
+    """Normalize a list of allowlist entries, drop empties, dedupe, preserve order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in entries:
+        norm = normalize_origin_entry(raw)
+        if norm is None or norm in seen:
+            continue
+        seen.add(norm)
+        out.append(norm)
+    return out
+
+
 def is_origin_allowed(domain_allowlist: list[str], origin: str | None) -> bool:
     """Return True if the request passes the allowlist check.
 
@@ -131,16 +180,19 @@ def is_origin_allowed(domain_allowlist: list[str], origin: str | None) -> bool:
         return True
     if origin == "null":
         return False
-    from urllib.parse import urlparse
 
-    host = urlparse(origin).netloc or origin
+    host = normalize_origin_entry(origin)
+    if host is None:
+        return False
     for entry in domain_allowlist:
-        if entry.startswith("*."):
-            suffix = entry[1:]  # ".example.com"
+        normalized = normalize_origin_entry(entry)
+        if normalized is None:
+            continue
+        if normalized.startswith("*."):
+            suffix = normalized[1:]  # ".example.com"
             if host.endswith(suffix) and host != suffix[1:]:
                 return True
             continue
-        normalized = urlparse(entry).netloc or entry
         if host == normalized:
             return True
     return False

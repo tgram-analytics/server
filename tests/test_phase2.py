@@ -178,13 +178,36 @@ async def test_wrong_internal_key_returns_401(api_client: AsyncClient) -> None:
 
 
 async def test_create_project_with_domain_allowlist(api_client: AsyncClient) -> None:
-    """domain_allowlist is stored and returned correctly."""
+    """domain_allowlist entries are normalized to bare hosts on write."""
     resp = await api_client.post(
         "/api/v1/internal/projects",
-        json={"name": "allowlist.com", "domain_allowlist": ["https://myapp.com"]},
+        json={"name": "allowlist.com", "domain_allowlist": ["https://myapp.com/"]},
     )
     assert resp.status_code == 201
-    assert resp.json()["domain_allowlist"] == ["https://myapp.com"]
+    assert resp.json()["domain_allowlist"] == ["myapp.com"]
+
+
+async def test_create_project_normalizes_mixed_allowlist(api_client: AsyncClient) -> None:
+    """Schemes, casing, paths, and duplicates collapse to a clean host list."""
+    resp = await api_client.post(
+        "/api/v1/internal/projects",
+        json={
+            "name": "mixed.com",
+            "domain_allowlist": [
+                "HTTPS://Example.com",
+                "example.com",
+                "https://api.example.com/",
+                "  ",
+                "*.staging.example.com",
+            ],
+        },
+    )
+    assert resp.status_code == 201
+    assert resp.json()["domain_allowlist"] == [
+        "example.com",
+        "api.example.com",
+        "*.staging.example.com",
+    ]
 
 
 async def test_list_projects_includes_created(api_client: AsyncClient) -> None:

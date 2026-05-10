@@ -51,6 +51,59 @@ def test_is_origin_allowed_bare_host_in_allowlist():
     assert is_origin_allowed(["localhost:3000"], "http://localhost:3000") is True
 
 
+# ── normalize_origin_entry ────────────────────────────────────────────────
+
+
+def test_normalize_origin_entry_strips_scheme_and_slash():
+    from app.services.events import normalize_origin_entry
+
+    assert normalize_origin_entry("https://example.com/") == "example.com"
+    assert normalize_origin_entry("HTTP://Example.com") == "example.com"
+
+
+def test_normalize_origin_entry_bare_host_passthrough():
+    from app.services.events import normalize_origin_entry
+
+    assert normalize_origin_entry("example.com") == "example.com"
+    assert normalize_origin_entry("  example.com  ") == "example.com"
+
+
+def test_normalize_origin_entry_preserves_port():
+    from app.services.events import normalize_origin_entry
+
+    assert normalize_origin_entry("http://localhost:3000") == "localhost:3000"
+
+
+def test_normalize_origin_entry_preserves_wildcard():
+    from app.services.events import normalize_origin_entry
+
+    assert normalize_origin_entry("*.example.com") == "*.example.com"
+    assert normalize_origin_entry("*.EXAMPLE.com/") == "*.example.com"
+
+
+def test_normalize_origin_entry_drops_path():
+    from app.services.events import normalize_origin_entry
+
+    assert normalize_origin_entry("https://example.com/some/path") == "example.com"
+
+
+def test_normalize_origin_entry_returns_none_for_empty():
+    from app.services.events import normalize_origin_entry
+
+    assert normalize_origin_entry("") is None
+    assert normalize_origin_entry("   ") is None
+    assert normalize_origin_entry("*.") is None
+
+
+def test_normalize_origin_entries_dedupes_and_drops_empty():
+    from app.services.events import normalize_origin_entries
+
+    result = normalize_origin_entries(
+        ["https://a.com/", "a.com", "", "  ", "B.com", "https://b.com"]
+    )
+    assert result == ["a.com", "b.com"]
+
+
 # ── Integration helpers ───────────────────────────────────────────────────
 
 
