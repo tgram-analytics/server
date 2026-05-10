@@ -26,7 +26,6 @@ from telegram.ext import ContextTypes
 
 from app.bot.auth import requires_user
 from app.bot.constants import PERIOD_LABEL, PERIODS
-from app.core.config import get_settings
 from app.core.database import get_session_factory
 from app.models.event import Event
 from app.models.user import User
@@ -204,7 +203,6 @@ async def send_chart_photo(
     assert isinstance(query.message, Message)
     pid = uuid.UUID(project_id_str)
     now = datetime.now(UTC)
-    settings = get_settings()
 
     factory = get_session_factory()
     async with factory() as session:
@@ -232,7 +230,6 @@ async def send_chart_photo(
             data,
             title=chart_event,
             period_label=period_label,
-            quickchart_url=settings.quickchart_url,
         )
     except ChartGenerationError:
         await query.edit_message_text(
@@ -272,7 +269,6 @@ async def update_report_chart(
     """Edit the existing chart photo in-place with a new period/granularity."""
     pid = uuid.UUID(project_id_str)
     now = datetime.now(UTC)
-    settings = get_settings()
 
     factory = get_session_factory()
     async with factory() as session:
@@ -294,7 +290,6 @@ async def update_report_chart(
             data,
             title=chart_event,
             period_label=period_label,
-            quickchart_url=settings.quickchart_url,
         )
     except ChartGenerationError:
         await query.answer("⚠️ Chart service unavailable.", show_alert=True)
@@ -319,7 +314,6 @@ async def send_report_comparison(
     """Edit the chart photo to show current vs prior period comparison."""
     pid = uuid.UUID(project_id_str)
     now = datetime.now(UTC)
-    settings = get_settings()
 
     delta = _PERIODS.get(period, timedelta(days=7))
     period_label = _PERIOD_LABEL.get(period, period)
@@ -387,7 +381,6 @@ async def send_report_comparison(
             data_previous,
             label_a=f"Current ({period_label})",
             label_b=f"Prior {period_label}",
-            quickchart_url=settings.quickchart_url,
         )
     except ChartGenerationError:
         await query.answer("⚠️ Chart service unavailable.", show_alert=True)
@@ -505,7 +498,6 @@ async def handle_report_project_pick(
     now = datetime.now(UTC)
     period, gran = "7d", "day"
     period_label = _PERIOD_LABEL[period]
-    settings = get_settings()
 
     factory = get_session_factory()
     async with factory() as session:
@@ -531,7 +523,6 @@ async def handle_report_project_pick(
             data,
             title=event_name,
             period_label=period_label,
-            quickchart_url=settings.quickchart_url,
         )
     except ChartGenerationError:
         await query.edit_message_text("⚠️ Chart service unavailable.", reply_markup=back_keyboard)
@@ -559,7 +550,6 @@ async def _send_report_chart_as_message(
     now = datetime.now(UTC)
     period, gran = "7d", "day"
     period_label = _PERIOD_LABEL[period]
-    settings = get_settings()
 
     factory = get_session_factory()
     async with factory() as session:
@@ -584,7 +574,6 @@ async def _send_report_chart_as_message(
             data,
             title=event_name,
             period_label=period_label,
-            quickchart_url=settings.quickchart_url,
         )
     except ChartGenerationError:
         await message.reply_text("⚠️ Chart service unavailable. Please try again later.")

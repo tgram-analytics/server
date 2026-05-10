@@ -26,9 +26,6 @@ class Settings(BaseSettings):
     # ── Database ──────────────────────────────────────────────────────────
     database_url: str
 
-    # ── External services ─────────────────────────────────────────────────
-    quickchart_url: str = "https://quickchart.io"
-
     # ── Security ──────────────────────────────────────────────────────────
     secret_key: str
 

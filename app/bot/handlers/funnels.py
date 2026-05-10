@@ -20,7 +20,6 @@ from telegram.ext import ContextTypes
 from app.bot.auth import requires_user
 from app.bot.constants import PERIOD_LABEL, PERIODS, TIME_WINDOW_LABEL, TIME_WINDOWS, escape_photo
 from app.bot.states import BotStateService
-from app.core.config import get_settings
 from app.core.database import get_session_factory
 from app.models.user import User
 from app.services.analytics import list_event_names
@@ -423,12 +422,10 @@ async def _view_funnel(
         )
         return
 
-    settings = get_settings()
     try:
         png_bytes = await generate_funnel_chart(
             data,
             title=f"{funnel.name} — {period_label} (window: {window_label})",
-            quickchart_url=settings.quickchart_url,
         )
     except ChartGenerationError:
         await query.edit_message_text(

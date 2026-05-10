@@ -21,7 +21,6 @@ from telegram.ext import ContextTypes
 from app.bot.auth import requires_user
 from app.bot.constants import escape_photo
 from app.bot.states import BotStateService
-from app.core.config import get_settings
 from app.core.database import get_session_factory
 from app.models.user import User
 from app.services.analytics import (
@@ -527,13 +526,11 @@ async def _send_event_chart(
         )
         return
 
-    settings = get_settings()
     try:
         png_bytes = await generate_line_chart(
             data,
             title=event_name,
             period_label=period_label,
-            quickchart_url=settings.quickchart_url,
         )
     except ChartGenerationError:
         await query.edit_message_text(
@@ -600,13 +597,11 @@ async def _update_event_chart(
         await query.answer(f"No data for {period_label}.", show_alert=True)
         return
 
-    settings = get_settings()
     try:
         png_bytes = await generate_line_chart(
             data,
             title=event_name,
             period_label=period_label,
-            quickchart_url=settings.quickchart_url,
         )
     except ChartGenerationError:
         await query.answer("⚠️ Chart service unavailable.", show_alert=True)
@@ -701,14 +696,12 @@ async def _send_event_comparison(
         ]
     )
 
-    settings = get_settings()
     try:
         png_bytes = await generate_comparison_chart(
             data_current,
             data_previous,
             label_a=f"Current ({period_label})",
             label_b=f"Prior {period_label}",
-            quickchart_url=settings.quickchart_url,
         )
     except ChartGenerationError:
         await query.answer("⚠️ Chart service unavailable.", show_alert=True)
@@ -825,12 +818,10 @@ async def _send_event_pie_chart(
     # Reshape from {"value": ..., "count": ...} to {"source": ..., "count": ...}
     pie_data = [{"source": r["value"], "count": r["count"]} for r in rows]
 
-    settings = get_settings()
     try:
         png_bytes = await generate_pie_chart(
             pie_data,
             title=f"{event_name} · {property_key}",
-            quickchart_url=settings.quickchart_url,
         )
     except ChartGenerationError:
         await query.answer("⚠️ Chart service unavailable.", show_alert=True)

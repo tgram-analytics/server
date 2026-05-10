@@ -2,15 +2,11 @@ services:
   server:
     build: .
     env_file: .env
-    environment:
-      QUICKCHART_URL: http://quickchart:3400
     ports:
       - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
-      quickchart:
-        condition: service_started
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -31,12 +27,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
-
-  quickchart:
-    image: ianw/quickchart
-    ports:
-      - "3400:3400"
     restart: unless-stopped
 
 volumes:
