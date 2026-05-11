@@ -130,22 +130,42 @@ async def _run_alert_evaluation(
                         f"<b>{alert.threshold_n}</b> today on <b>{safe_project}</b>"
                     )
 
+                hidden_lines: list[str] = []
                 if properties:
-                    lines = [
-                        f"<b>{html.escape(str(k))}:</b> {html.escape(str(v))}"
-                        for k, v in properties.items()
-                    ]
-                    msg += "\n\n" + "\n".join(lines)
+                    visible_lines: list[str] = []
+                    for k, v in properties.items():
+                        key_str = str(k)
+                        is_meta = key_str.startswith("$") and key_str != "$timezone"
+                        if is_meta:
+                            hidden_lines.append(f"{key_str}: {v}")
+                        else:
+                            visible_lines.append(
+                                f"<b>{html.escape(key_str)}:</b> {html.escape(str(v))}"
+                            )
+                    if visible_lines:
+                        msg += "\n\n" + "\n".join(visible_lines)
 
                 aid = str(alert.id)
-                keyboard = InlineKeyboardMarkup(
-                    [
+                rows = []
+                if hidden_lines:
+                    from app.bot.event_meta_cache import store as _store_meta
+
+                    token = _store_meta("\n".join(hidden_lines))
+                    rows.append(
                         [
-                            InlineKeyboardButton("🔕 Silence", callback_data=f"alert_sil:{aid}"),
-                            InlineKeyboardButton("🚫 Disable", callback_data=f"alert_dis:{aid}"),
+                            InlineKeyboardButton(
+                                f"🔍 Show technical details ({len(hidden_lines)})",
+                                callback_data=f"alert_meta:{token}",
+                            )
                         ]
+                    )
+                rows.append(
+                    [
+                        InlineKeyboardButton("🔕 Silence", callback_data=f"alert_sil:{aid}"),
+                        InlineKeyboardButton("🚫 Disable", callback_data=f"alert_dis:{aid}"),
                     ]
                 )
+                keyboard = InlineKeyboardMarkup(rows)
 
                 try:
                     await bot.send_message(
