@@ -135,7 +135,7 @@ def _empty_data_message(title: str, period_label: str | None = None) -> alt.Char
             title=alt.TitleParams(text=title, subtitle=subtitle),
         )
     )
-    return chart
+    return chart  # type: ignore[no-any-return]
 
 
 # ── line ────────────────────────────────────────────────────────────────
@@ -163,7 +163,7 @@ async def generate_line_chart(
     area = base.mark_area(
         line={"color": _TG_BLUE, "strokeWidth": 3},
         interpolate="monotone",
-        color=alt.Gradient(
+        color=alt.Gradient(  # type: ignore[no-untyped-call]
             gradient="linear",
             stops=[
                 alt.GradientStop(color=_TG_BLUE, offset=0),
@@ -295,7 +295,7 @@ async def generate_bar_chart(
         .mark_bar(
             cornerRadiusEnd=4,
             height=22,
-            color=alt.Gradient(
+            color=alt.Gradient(  # type: ignore[no-untyped-call]
                 gradient="linear",
                 stops=[
                     alt.GradientStop(color=_TG_BLUE_LIGHT, offset=0),
