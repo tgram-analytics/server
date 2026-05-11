@@ -132,10 +132,22 @@ async def alert_callback(
     """Handle all alert-related callbacks."""
     query = update.callback_query
     assert query is not None
-    await query.answer()
 
     owner_user_id = user.id
     data: str = query.data or ""
+
+    if data.startswith("alert_meta:"):
+        from app.bot.event_meta_cache import get as _get_meta
+
+        token = data[11:]
+        text = _get_meta(token)
+        await query.answer(
+            text=text or "Details expired — re-trigger the event to see them.",
+            show_alert=True,
+        )
+        return
+
+    await query.answer()
 
     if data.startswith("alert_add:"):
         project_id_str = data[10:]
