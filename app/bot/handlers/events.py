@@ -174,6 +174,9 @@ async def events_callback(
         prop_key = data[11:]
         await _send_event_pie_chart(query, owner_user_id, prop_key)
 
+    elif data == "evta:pie_all":
+        await _send_full_pie_charts(query, owner_user_id)
+
 
 # ── Events list ────────────────────────────────────────────────────────────────
 
@@ -416,7 +419,8 @@ async def _show_event_detail(
                 InlineKeyboardButton("🔔 Add Alert", callback_data="evta:alert"),
                 InlineKeyboardButton("📊 Chart (7d)", callback_data="evta:chart"),
             ],
-            [InlineKeyboardButton("🥧 Pie Chart", callback_data="evta:pie")],
+            [InlineKeyboardButton("🥧 Specific Pie Chart", callback_data="evta:pie")],
+            [InlineKeyboardButton("🥧📊 Full Pie Charts", callback_data="evta:pie_all")],
             [InlineKeyboardButton("« Back to Events", callback_data="back:events")],
         ]
     )
@@ -842,3 +846,8 @@ async def _send_event_pie_chart(
         caption=f"🥧 {project.name} · {event_name} · {property_key}",
         reply_markup=back_keyboard,
     )
+
+
+async def _send_full_pie_charts(query: CallbackQuery, owner_user_id: uuid.UUID) -> None:
+    """Generate one pie chart per property for the current event. Real body lands in Phase 2."""
+    await query.answer("Full Pie Charts coming online…", show_alert=False)
