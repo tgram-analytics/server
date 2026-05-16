@@ -282,6 +282,14 @@ async def test_per_element_count_and_most_common_combos(api_client, db_session) 
     assert by_elem["audio_only"] == 1
 
     # ── Query 2: most common combos ────────────────────────────────────────
+    # NOTE: we repeat the ``properties->'interest_set'`` expression in
+    # ``GROUP BY`` and ``ORDER BY`` instead of using the ``combo`` alias.
+    # Postgres rejects ``combo::text`` in ``ORDER BY`` with "column combo
+    # does not exist" because the typecast forces ``combo`` to be parsed as
+    # an input-column reference rather than the SELECT-list alias. The
+    # canonical README query has no cast and is shorter (``GROUP BY combo``
+    # alone), so this only affects the deterministic tie-breaker we need
+    # for the assertion below.
     combos = (
         await db_session.execute(
             text(
@@ -289,8 +297,8 @@ async def test_per_element_count_and_most_common_combos(api_client, db_session) 
                 SELECT properties->'interest_set' AS combo, count(*) AS n
                 FROM events
                 WHERE project_id = :pid AND event_name = 'onboarding_completed'
-                GROUP BY combo
-                ORDER BY n DESC, combo::text ASC
+                GROUP BY properties->'interest_set'
+                ORDER BY n DESC, (properties->'interest_set')::text ASC
                 """
             ),
             {"pid": project_id},
