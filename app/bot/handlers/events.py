@@ -27,9 +27,11 @@ from app.services.analytics import (
     compare_periods,
     count_events,
     events_over_time,
+    find_array_property_keys,
     list_event_names,
     list_property_keys,
     list_recent_events,
+    top_array_elements,
     top_properties,
 )
 from app.services.charts import (
@@ -171,8 +173,19 @@ async def events_callback(
         await _show_pie_property_picker(await escape_photo(query), owner_user_id)
 
     elif data.startswith("evta:pie_k:"):
+        # ``evta:pie_k:<key>`` — pie of distinct top-level property values
+        # ("combos" view; for array values this is the whole array as one
+        # bucket, which after the server's _set sort collapses equivalent
+        # combinations into a single slice).
         prop_key = data[11:]
-        await _send_event_pie_chart(query, owner_user_id, prop_key)
+        await _send_event_pie_chart(query, owner_user_id, prop_key, mode="combos")
+
+    elif data.startswith("evta:pie_v:"):
+        # ``evta:pie_v:<key>`` — pie of individual array elements
+        # ("values" view; unnests via jsonb_array_elements_text so a single
+        # event with ``["a","b"]`` contributes to both ``a`` and ``b``).
+        prop_key = data[11:]
+        await _send_event_pie_chart(query, owner_user_id, prop_key, mode="values")
 
     elif data == "evta:pie_all":
         await _send_full_pie_charts(query, owner_user_id)
@@ -745,11 +758,23 @@ async def _show_pie_property_picker(query: CallbackQuery, owner_user_id: uuid.UU
 
         pid = uuid.UUID(project_id_str)
         now = datetime.now(UTC)
+        start = now - timedelta(days=30)
         keys = await list_property_keys(
             session,
             project_id=pid,
             event_name=event_name,
-            start=now - timedelta(days=30),
+            start=start,
+            end=now,
+        )
+        # Subset of *keys* whose value is a JSON array on at least one event.
+        # These get an extra "(values)" button alongside the default scalar/
+        # "(combos)" one, so users can pick between a per-combo pie and a
+        # per-element pie of the same key.
+        array_keys = await find_array_property_keys(
+            session,
+            project_id=pid,
+            event_name=event_name,
+            start=start,
             end=now,
         )
 
@@ -757,9 +782,18 @@ async def _show_pie_property_picker(query: CallbackQuery, owner_user_id: uuid.UU
         await query.answer(f"No properties found for {event_name}.", show_alert=True)
         return
 
-    rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(k, callback_data=f"evta:pie_k:{k}")] for k in keys
-    ]
+    rows: list[list[InlineKeyboardButton]] = []
+    for k in keys:
+        if k in array_keys:
+            # Two buttons on one row: combos and individual values.
+            rows.append(
+                [
+                    InlineKeyboardButton(f"{k} (combos)", callback_data=f"evta:pie_k:{k}"),
+                    InlineKeyboardButton(f"{k} (values)", callback_data=f"evta:pie_v:{k}"),
+                ]
+            )
+        else:
+            rows.append([InlineKeyboardButton(k, callback_data=f"evta:pie_k:{k}")])
     rows.append([InlineKeyboardButton("« Back", callback_data=f"evt:{event_name}")])
 
     await query.edit_message_text(
@@ -770,9 +804,25 @@ async def _show_pie_property_picker(query: CallbackQuery, owner_user_id: uuid.UU
 
 
 async def _send_event_pie_chart(
-    query: CallbackQuery, owner_user_id: uuid.UUID, property_key: str
+    query: CallbackQuery,
+    owner_user_id: uuid.UUID,
+    property_key: str,
+    *,
+    mode: str = "combos",
 ) -> None:
-    """Generate and send a pie chart for the selected event + property."""
+    """Generate and send a pie chart for the selected event + property.
+
+    ``mode``:
+        ``"combos"`` (default) — group by the raw top-level value. For array
+        properties this buckets the whole array as one entry; combined with
+        the server's write-time ``_set`` sort, equivalent combinations
+        collapse into a single slice. Same query as before this change.
+
+        ``"values"`` — unnest array values via ``jsonb_array_elements_text``
+        so each element contributes its own count. Only meaningful for
+        array-valued properties; the bot UI only exposes this mode for
+        keys returned by :func:`find_array_property_keys`.
+    """
     assert isinstance(query.message, Message)
     factory = get_session_factory()
     async with factory() as session:
@@ -798,8 +848,7 @@ async def _send_event_pie_chart(
             return
 
         now = datetime.now(UTC)
-        rows = await top_properties(
-            session,
+        query_kwargs = dict(
             project_id=pid,
             event_name=event_name,
             property_key=property_key,
@@ -807,6 +856,10 @@ async def _send_event_pie_chart(
             end=now,
             limit=10,
         )
+        if mode == "values":
+            rows = await top_array_elements(session, **query_kwargs)
+        else:
+            rows = await top_properties(session, **query_kwargs)
 
     back_keyboard = InlineKeyboardMarkup(
         [
@@ -816,23 +869,29 @@ async def _send_event_pie_chart(
     )
 
     if not rows:
-        await query.answer(f"No data for property '{property_key}'.", show_alert=True)
+        msg = (
+            f"No array values found for '{property_key}'."
+            if mode == "values"
+            else f"No data for property '{property_key}'."
+        )
+        await query.answer(msg, show_alert=True)
         return
 
     # Reshape from {"value": ..., "count": ...} to {"source": ..., "count": ...}
     pie_data = [{"source": r["value"], "count": r["count"]} for r in rows]
+    suffix = " (values)" if mode == "values" else ""
 
     try:
         png_bytes = await generate_pie_chart(
             pie_data,
-            title=f"{event_name} · {property_key}",
+            title=f"{event_name} · {property_key}{suffix}",
         )
     except ChartGenerationError:
         await query.answer("⚠️ Chart service unavailable.", show_alert=True)
         return
 
     await query.edit_message_text(
-        f"🥧 <b>{html.escape(event_name)}</b> · {html.escape(property_key)}  ↓",
+        f"🥧 <b>{html.escape(event_name)}</b> · {html.escape(property_key)}{html.escape(suffix)}  ↓",
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(
             [
@@ -843,7 +902,7 @@ async def _send_event_pie_chart(
     )
     await query.message.reply_photo(
         photo=png_bytes,
-        caption=f"🥧 {project.name} · {event_name} · {property_key}",
+        caption=f"🥧 {project.name} · {event_name} · {property_key}{suffix}",
         reply_markup=back_keyboard,
     )
 
