@@ -168,7 +168,7 @@ async def events_callback(
             await _send_event_comparison(query, owner_user_id, period=parts[0], gran=parts[1])
 
     elif data == "evta:pie":
-        await _show_pie_property_picker(query, owner_user_id)
+        await _show_pie_property_picker(await escape_photo(query), owner_user_id)
 
     elif data.startswith("evta:pie_k:"):
         prop_key = data[11:]
