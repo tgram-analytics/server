@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.event import Event
@@ -150,6 +150,102 @@ async def top_properties(
         .limit(limit)
     )
     return [{"value": row.value, "count": row.count} for row in result]
+
+
+async def top_array_elements(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    event_name: str,
+    property_key: str,
+    start: datetime,
+    end: datetime,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    """Return the top *limit* individual elements of an array-valued property.
+
+    Uses ``jsonb_array_elements_text`` to unnest the array, so a single event
+    with ``properties->'interest_set' = ["a", "b"]`` contributes ``+1`` to
+    both ``"a"`` and ``"b"`` counts (vs. :func:`top_properties` which would
+    bucket the whole array as one string-encoded value).
+
+    The ``jsonb_typeof = 'array'`` guard skips rows where the value isn't an
+    array, so callers can pass any key without risking a Postgres type error.
+    Counts are sorted descending; ties are broken alphabetically by element
+    so the result is deterministic across runs.
+
+    Returns ``[{"value": str, "count": int}, ...]`` with the same shape as
+    :func:`top_properties`.
+    """
+    # Raw SQL is cleaner here than building a LATERAL join in the SQLAlchemy
+    # Core expression API. The query is parameterised; ``property_key`` is
+    # bound, not interpolated, so the path is injection-safe.
+    sql = text(
+        """
+        SELECT elem AS value, count(*) AS count
+        FROM events,
+             jsonb_array_elements_text(properties -> :key) AS elem
+        WHERE project_id = :pid
+          AND event_name = :ename
+          AND timestamp >= :start
+          AND timestamp < :end
+          AND jsonb_typeof(properties -> :key) = 'array'
+        GROUP BY elem
+        ORDER BY count(*) DESC, elem ASC
+        LIMIT :limit
+        """
+    )
+    result = await session.execute(
+        sql,
+        {
+            "pid": project_id,
+            "ename": event_name,
+            "key": property_key,
+            "start": start,
+            "end": end,
+            "limit": limit,
+        },
+    )
+    return [{"value": row.value, "count": row.count} for row in result]
+
+
+async def find_array_property_keys(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    event_name: str,
+    start: datetime,
+    end: datetime,
+) -> set[str]:
+    """Return the property keys that have at least one array value in the window.
+
+    Used by the bot's pie-chart property picker to decide which keys deserve
+    an "(individual values)" button in addition to the default "(combos)"
+    one. Only the *type* of the value is inspected via :func:`jsonb_typeof`
+    — the array contents are not pulled into memory.
+    """
+    sql = text(
+        """
+        SELECT DISTINCT kv.key AS key
+        FROM events,
+             jsonb_each(properties) AS kv
+        WHERE project_id = :pid
+          AND event_name = :ename
+          AND timestamp >= :start
+          AND timestamp < :end
+          AND jsonb_typeof(kv.value) = 'array'
+        """
+    )
+    result = await session.execute(
+        sql,
+        {
+            "pid": project_id,
+            "ename": event_name,
+            "start": start,
+            "end": end,
+        },
+    )
+    return {row.key for row in result}
 
 
 async def list_event_names(

@@ -392,3 +392,208 @@ async def test_retention_cron_zero_retention_keeps_all(db_session):
 
     deleted = await run_retention_cron(db_session)
     assert deleted == 0
+
+
+# ── top_array_elements ────────────────────────────────────────────────────
+
+
+async def test_top_array_elements_unnests_and_counts(db_session):
+    """A property whose value is a JSON array contributes one count per element."""
+    from app.services.analytics import top_array_elements
+
+    pid = await _seed_project(db_session)
+    ts = _now - timedelta(hours=1)
+    # 3 events with overlapping interest_set arrays
+    await _seed_event(db_session, pid, "onboarding", ts, {"interest_set": ["a", "b"]})
+    await _seed_event(db_session, pid, "onboarding", ts, {"interest_set": ["a"]})
+    await _seed_event(db_session, pid, "onboarding", ts, {"interest_set": ["b", "c"]})
+
+    rows = await top_array_elements(
+        db_session,
+        project_id=pid,
+        event_name="onboarding",
+        property_key="interest_set",
+        start=_week_ago,
+        end=_now + timedelta(hours=1),
+    )
+    # "a" appears 2x, "b" 2x, "c" 1x. The two-way tie is sorted alphabetically.
+    counts = {r["value"]: r["count"] for r in rows}
+    assert counts == {"a": 2, "b": 2, "c": 1}
+
+
+async def test_top_array_elements_ignores_non_array_values(db_session):
+    """Scalar values for the same key are skipped (no jsonb_typeof error)."""
+    from app.services.analytics import top_array_elements
+
+    pid = await _seed_project(db_session)
+    ts = _now - timedelta(hours=1)
+    # Mix: arrays and scalars under the same key. The scalar row contributes nothing.
+    await _seed_event(db_session, pid, "e", ts, {"vals": ["a", "b"]})
+    await _seed_event(db_session, pid, "e", ts, {"vals": "scalar-not-array"})
+    await _seed_event(db_session, pid, "e", ts, {"vals": ["a"]})
+
+    rows = await top_array_elements(
+        db_session,
+        project_id=pid,
+        event_name="e",
+        property_key="vals",
+        start=_week_ago,
+        end=_now + timedelta(hours=1),
+    )
+    counts = {r["value"]: r["count"] for r in rows}
+    assert counts == {"a": 2, "b": 1}
+
+
+async def test_top_array_elements_excludes_other_events(db_session):
+    """Only the requested event_name is counted."""
+    from app.services.analytics import top_array_elements
+
+    pid = await _seed_project(db_session)
+    ts = _now - timedelta(hours=1)
+    await _seed_event(db_session, pid, "wanted", ts, {"tags": ["x"]})
+    await _seed_event(db_session, pid, "other", ts, {"tags": ["x"]})
+
+    rows = await top_array_elements(
+        db_session,
+        project_id=pid,
+        event_name="wanted",
+        property_key="tags",
+        start=_week_ago,
+        end=_now + timedelta(hours=1),
+    )
+    assert {r["value"]: r["count"] for r in rows} == {"x": 1}
+
+
+async def test_top_array_elements_respects_time_range(db_session):
+    from app.services.analytics import top_array_elements
+
+    pid = await _seed_project(db_session)
+    in_range = _now - timedelta(hours=1)
+    out_of_range = _now - timedelta(days=30)
+    await _seed_event(db_session, pid, "e", in_range, {"tags": ["a"]})
+    await _seed_event(db_session, pid, "e", out_of_range, {"tags": ["a", "b"]})
+
+    rows = await top_array_elements(
+        db_session,
+        project_id=pid,
+        event_name="e",
+        property_key="tags",
+        start=_week_ago,
+        end=_now + timedelta(hours=1),
+    )
+    assert {r["value"]: r["count"] for r in rows} == {"a": 1}
+
+
+async def test_top_array_elements_limit(db_session):
+    """Limit truncates the result, keeping the top *limit* by count."""
+    from app.services.analytics import top_array_elements
+
+    pid = await _seed_project(db_session)
+    ts = _now - timedelta(hours=1)
+    # 4 distinct elements: a=3, b=2, c=1, d=1
+    await _seed_event(db_session, pid, "e", ts, {"t": ["a", "b"]})
+    await _seed_event(db_session, pid, "e", ts, {"t": ["a", "b"]})
+    await _seed_event(db_session, pid, "e", ts, {"t": ["a", "c"]})
+    await _seed_event(db_session, pid, "e", ts, {"t": ["d"]})
+
+    rows = await top_array_elements(
+        db_session,
+        project_id=pid,
+        event_name="e",
+        property_key="t",
+        start=_week_ago,
+        end=_now + timedelta(hours=1),
+        limit=2,
+    )
+    assert len(rows) == 2
+    assert rows[0] == {"value": "a", "count": 3}
+    assert rows[1] == {"value": "b", "count": 2}
+
+
+async def test_top_array_elements_empty_when_no_arrays(db_session):
+    """All-scalar property → empty result, not an error."""
+    from app.services.analytics import top_array_elements
+
+    pid = await _seed_project(db_session)
+    ts = _now - timedelta(hours=1)
+    await _seed_event(db_session, pid, "e", ts, {"plan": "pro"})
+    await _seed_event(db_session, pid, "e", ts, {"plan": "free"})
+
+    rows = await top_array_elements(
+        db_session,
+        project_id=pid,
+        event_name="e",
+        property_key="plan",
+        start=_week_ago,
+        end=_now + timedelta(hours=1),
+    )
+    assert rows == []
+
+
+# ── find_array_property_keys ──────────────────────────────────────────────
+
+
+async def test_find_array_property_keys_identifies_array_keys(db_session):
+    """Returns the subset of property keys that have at least one array value
+    in the time window — used by the pie picker to decide which keys deserve
+    a "(values)" button in addition to the default "(combos)" one.
+    """
+    from app.services.analytics import find_array_property_keys
+
+    pid = await _seed_project(db_session)
+    ts = _now - timedelta(hours=1)
+    # Two array keys, one scalar key.
+    await _seed_event(
+        db_session,
+        pid,
+        "e",
+        ts,
+        {"interest_set": ["a", "b"], "plan": "pro", "ab_variants": ["A"]},
+    )
+    await _seed_event(db_session, pid, "e", ts, {"plan": "free"})
+
+    keys = await find_array_property_keys(
+        db_session,
+        project_id=pid,
+        event_name="e",
+        start=_week_ago,
+        end=_now + timedelta(hours=1),
+    )
+    assert keys == {"interest_set", "ab_variants"}
+
+
+async def test_find_array_property_keys_empty_when_no_arrays(db_session):
+    from app.services.analytics import find_array_property_keys
+
+    pid = await _seed_project(db_session)
+    ts = _now - timedelta(hours=1)
+    await _seed_event(db_session, pid, "e", ts, {"plan": "pro"})
+
+    keys = await find_array_property_keys(
+        db_session,
+        project_id=pid,
+        event_name="e",
+        start=_week_ago,
+        end=_now + timedelta(hours=1),
+    )
+    assert keys == set()
+
+
+async def test_find_array_property_keys_respects_event_name_and_range(db_session):
+    from app.services.analytics import find_array_property_keys
+
+    pid = await _seed_project(db_session)
+    in_range = _now - timedelta(hours=1)
+    out_of_range = _now - timedelta(days=30)
+    await _seed_event(db_session, pid, "wanted", in_range, {"tags": ["x"]})
+    await _seed_event(db_session, pid, "other", in_range, {"unrelated": ["y"]})
+    await _seed_event(db_session, pid, "wanted", out_of_range, {"oldtags": ["z"]})
+
+    keys = await find_array_property_keys(
+        db_session,
+        project_id=pid,
+        event_name="wanted",
+        start=_week_ago,
+        end=_now + timedelta(hours=1),
+    )
+    assert keys == {"tags"}
