@@ -924,24 +924,21 @@ async def _send_full_pie_charts(query: CallbackQuery, owner_user_id: uuid.UUID) 
         )
         return
 
-    # Variant: post Back keyboard as a trailing text message after the loop
-    # so we don't need to predict which photo will be last after possible
-    # ChartGenerationError skips. Cleanly verifiable: exactly one trailing
-    # message with the Back button when sent_count > 0.
-    sent_count = 0
+    # Generate every chart up front (skipping ChartGenerationError silently),
+    # then bundle them into Telegram media groups so the chat sees one album
+    # card per 10 properties instead of one message per property.
+    items: list[tuple[bytes, str]] = []
     for key, rows in key_rows:
         pie_data = [{"source": r["value"], "count": r["count"]} for r in rows]
         try:
             png = await generate_pie_chart(pie_data, title=f"{event_name} · {key}")
         except ChartGenerationError:
             continue
-        await query.message.reply_photo(
-            photo=png,
-            caption=f"🥧 {project.name} · {event_name} · {key}",
-        )
-        sent_count += 1
+        total = sum(int(r["count"]) for r in rows)
+        caption = f"🥧 {project.name} · {event_name} · {key}\n📈 {total:,} events"
+        items.append((png, caption))
 
-    if sent_count == 0:
+    if not items:
         await query.edit_message_text(
             f"⚠️ All chart generations failed for {html.escape(event_name)}.",
             parse_mode="HTML",
@@ -949,7 +946,14 @@ async def _send_full_pie_charts(query: CallbackQuery, owner_user_id: uuid.UUID) 
         )
         return
 
-    await query.message.reply_text(
-        "« Back to Events",
-        reply_markup=back_keyboard,
-    )
+    # Telegram requires a media group to have 2-10 items. Chunk by 10, and
+    # fall back to reply_photo when a chunk has only 1 item.
+    for chunk_start in range(0, len(items), 10):
+        chunk = items[chunk_start : chunk_start + 10]
+        if len(chunk) == 1:
+            png, caption = chunk[0]
+            await query.message.reply_photo(photo=png, caption=caption)
+        else:
+            await query.message.reply_media_group(
+                media=[InputMediaPhoto(media=p, caption=c) for p, c in chunk]
+            )
