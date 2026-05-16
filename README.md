@@ -94,6 +94,66 @@ await TgAnalytics.init(
 await TgAnalytics.track('purchase', properties: {'amount': 49});
 ```
 
+### Multi-value properties
+
+Event `properties` accept **arrays of scalars** in addition to single
+scalars — useful for multi-select inputs, A/B variant memberships, and
+any set-style attribute that would otherwise be lossy to flatten:
+
+```bash
+curl -X POST https://your-server.com/api/v1/track \
+  -H "Content-Type: application/json" \
+  -d '{
+    "api_key": "proj_xxxxxxxxxxxx",
+    "event_name": "onboarding_completed",
+    "session_id": "uuid-here",
+    "properties": {
+      "role": "creator",
+      "interest_set": ["vertical_to_horizontal", "unsure"]
+    }
+  }'
+```
+
+Arrays may only contain scalars (`string`, `number`, `boolean`, `null`).
+Nested objects, nested arrays, and `undefined` are rejected with **422**.
+
+#### Sort behaviour
+
+The server applies **write-time sorting** to arrays whose key ends in
+`_set` (e.g. `interest_set`, `feature_flags_set`). This makes the "most
+common combos" query a trivial `GROUP BY` — `["a","b"]` and `["b","a"]`
+collapse into one bucket without read-time normalisation. Mixed-type
+arrays (e.g. `[1, "a"]`) cannot be compared and are stored as-sent.
+
+Other array properties keep insertion order, which matters for
+ordered-list semantics like `recent_searches`.
+
+#### Canonical dashboard queries
+
+The JSONB `properties` column lets the same event power two
+complementary dashboards:
+
+```sql
+-- 1. Per-element count (e.g. a pie chart of how often each
+--    interest is selected):
+SELECT elem, count(*) AS n
+FROM events,
+     jsonb_array_elements_text(properties->'interest_set') AS elem
+WHERE event_name = 'onboarding_completed'
+GROUP BY elem
+ORDER BY n DESC;
+
+-- 2. Most common combinations of selected values:
+SELECT properties->'interest_set' AS combo, count(*) AS n
+FROM events
+WHERE event_name = 'onboarding_completed'
+GROUP BY combo
+ORDER BY n DESC
+LIMIT 20;
+```
+
+No schema migration is needed — Postgres `JSONB` stores arrays natively.
+
 ### Browser vs. server calls
 
 One `proj_` API key handles both: embed it in your frontend **and** use it from
