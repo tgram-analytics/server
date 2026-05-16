@@ -345,7 +345,13 @@ async def generate_pie_chart(
     title: str,
     label_key: str = "source",
 ) -> bytes:
-    """Donut chart with Telegram-themed multi-color slices and % labels."""
+    """Donut chart with Telegram-themed multi-color slices.
+
+    Each slice carries a "%" label; each legend entry carries the raw count
+    so users can read both proportion (on the chart) and sample size (on the
+    legend) at a glance. Legend is sorted by descending count to match the
+    visual stacking order.
+    """
     if not data:
         return await _render(_empty_data_message(title))
 
@@ -355,6 +361,7 @@ async def generate_pie_chart(
             "label": r[label_key],
             "count": r["count"],
             "pct": f"{r['count'] / total * 100:.1f}%",
+            "legend": f"{r[label_key]} · {r['count']:,}",
         }
         for r in data
     ]
@@ -362,9 +369,10 @@ async def generate_pie_chart(
     base = alt.Chart(alt.InlineData(values=values)).encode(
         theta=alt.Theta("count:Q", stack=True),
         color=alt.Color(
-            "label:N",
+            "legend:N",
             scale=alt.Scale(range=_TG_PALETTE),
             legend=alt.Legend(title=None, orient="right"),
+            sort=alt.SortField(field="count", order="descending"),
         ),
         order=alt.Order("count:Q", sort="descending"),
     )

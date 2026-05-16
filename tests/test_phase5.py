@@ -112,6 +112,31 @@ async def test_generate_pie_chart_returns_valid_png():
     assert result[:8] == _PNG_MAGIC
 
 
+async def test_generate_pie_chart_spec_carries_pct_and_legend_counts():
+    """Slice labels carry the % and legend entries carry the raw count."""
+    from app.services import charts as charts_mod
+
+    captured: dict = {}
+
+    def _capture(spec, scale):  # noqa: ANN001
+        captured["spec"] = spec
+        return _PNG_MAGIC + b"\x00" * 32
+
+    data = [{"source": "Google", "count": 10}, {"source": "Twitter", "count": 5}]
+    with patch.object(charts_mod.vlc, "vegalite_to_png", side_effect=_capture):
+        await charts_mod.generate_pie_chart(data, title="Sources")
+
+    spec_str = str(captured["spec"])
+    # Percent labels on slices (10/15 ≈ 66.7%, 5/15 ≈ 33.3%).
+    assert "66.7%" in spec_str
+    assert "33.3%" in spec_str
+    # Legend entries embed the raw count alongside the label.
+    assert "Google · 10" in spec_str
+    assert "Twitter · 5" in spec_str
+    # Legend is sorted by count (descending) so it lines up with slice order.
+    assert "'order': 'descending'" in spec_str or '"order": "descending"' in spec_str
+
+
 async def test_generate_funnel_chart_returns_valid_png():
     from app.services.charts import generate_funnel_chart
 
