@@ -87,11 +87,17 @@ async def test_full_pie_charts_button_present_in_event_detail(session_factory, s
     assert len(rows[full_row_idx]) == 1, "Full Pie Charts must be alone on its row"
 
 
-# ── Test 2: fans out one photo per non-empty property ──────────────────────────
+# ── Test 2: bundles non-empty properties into a single media group ─────────────
 
 
-async def test_full_pie_charts_sends_one_photo_per_property(session_factory, singleton_user):
-    """Each property with data produces exactly one reply_photo call."""
+async def test_full_pie_charts_sends_album_with_one_item_per_property(
+    session_factory, singleton_user
+):
+    """Two properties → one reply_media_group call carrying two InputMediaPhoto.
+
+    Also asserts each caption embeds the property's sample size (n events) so
+    users can gauge chart reliability at a glance.
+    """
     from app.bot.handlers.events import _send_full_pie_charts
     from app.bot.states import BotStateService
     from app.services.events import insert_event
@@ -107,7 +113,8 @@ async def test_full_pie_charts_sends_one_photo_per_property(session_factory, sin
         await session.commit()
         pid = project.id
 
-        # Two distinct properties: plan + currency.
+        # Two distinct properties: plan + currency. Three events → each property
+        # has total count 3 (every event sets both).
         seed = [
             {"plan": "pro", "currency": "USD"},
             {"plan": "free", "currency": "EUR"},
@@ -139,6 +146,7 @@ async def test_full_pie_charts_sends_one_photo_per_property(session_factory, sin
     query.message = MagicMock(spec=Message)
     query.message.chat_id = ADMIN_ID
     query.message.reply_photo = AsyncMock()
+    query.message.reply_media_group = AsyncMock()
     query.message.reply_text = AsyncMock()
 
     fake_png = b"FAKE_PNG_BYTES"
@@ -148,28 +156,30 @@ async def test_full_pie_charts_sends_one_photo_per_property(session_factory, sin
     ) as mock_chart:
         await _send_full_pie_charts(query, singleton_user.id)
 
-    assert query.message.reply_photo.call_count == 2, (
-        f"expected 2 reply_photo calls, got {query.message.reply_photo.call_count}"
+    # Exactly one media-group call for the two-item album.
+    assert query.message.reply_media_group.call_count == 1, (
+        f"expected 1 reply_media_group call, got {query.message.reply_media_group.call_count}"
+    )
+    assert query.message.reply_photo.call_count == 0, (
+        "two-item chunk should go through reply_media_group, not reply_photo"
     )
     assert mock_chart.call_count == 2
 
-    # Gather captions and verify both property keys are mentioned.
-    captions = []
-    for call in query.message.reply_photo.call_args_list:
-        cap = call[1].get("caption") or ""
-        captions.append(cap)
-        # No reply_markup attached to the photos — the trailing text carries
-        # the Back keyboard.
-        assert "reply_markup" not in call[1], (
-            f"reply_photo should not carry a reply_markup; got {call[1]}"
-        )
+    media = query.message.reply_media_group.call_args[1].get("media")
+    assert media is not None and len(media) == 2, (
+        f"media group must carry 2 InputMediaPhoto; got {media}"
+    )
 
+    captions = [m.caption or "" for m in media]
     joined = " | ".join(captions)
     assert "plan" in joined, f"plan caption missing: {captions}"
     assert "currency" in joined, f"currency caption missing: {captions}"
+    # Sample-size line ("3 events" with thousands-separator formatting).
+    assert "3 events" in joined, f"each caption must show n=events; got {captions}"
 
-    # Trailing back-nav text message fires exactly once.
-    query.message.reply_text.assert_called_once()
+    # No trailing back-nav message — the edited banner above the album carries
+    # the Back keyboard.
+    query.message.reply_text.assert_not_called()
 
 
 # ── Test 3: silently skips empty + failing keys ────────────────────────────────
@@ -181,10 +191,12 @@ async def test_full_pie_charts_skips_keys_with_no_data_and_chart_failures(
     """Empty `top_properties` results and ChartGenerationError raisers are skipped.
 
     Three property keys are seeded:
-      - good_key  → valid values, chart succeeds → 1 reply_photo
+      - good_key  → valid values, chart succeeds → 1 reply_photo (single-item
+                    chunk: falls back to reply_photo because Telegram media
+                    groups require 2-10 items)
       - fail_key  → valid values, chart raises    → skipped
       - bad_key   → all None values, top_properties returns []  → skipped
-    Final state: exactly one reply_photo, one trailing reply_text, no exception.
+    Final state: exactly one reply_photo, no reply_media_group, no exception.
     """
     from app.bot.handlers.events import _send_full_pie_charts
     from app.bot.states import BotStateService
@@ -234,6 +246,7 @@ async def test_full_pie_charts_skips_keys_with_no_data_and_chart_failures(
     query.message = MagicMock(spec=Message)
     query.message.chat_id = ADMIN_ID
     query.message.reply_photo = AsyncMock()
+    query.message.reply_media_group = AsyncMock()
     query.message.reply_text = AsyncMock()
 
     async def _chart_side_effect(pie_data, *, title):
@@ -248,13 +261,19 @@ async def test_full_pie_charts_skips_keys_with_no_data_and_chart_failures(
         # Must not raise — silent skip on both empty data and chart errors.
         await _send_full_pie_charts(query, singleton_user.id)
 
+    # Single-survivor chunk falls back to reply_photo (media groups require 2+).
     assert query.message.reply_photo.call_count == 1, (
         f"only good_key should produce a photo; got {query.message.reply_photo.call_count}"
+    )
+    assert query.message.reply_media_group.call_count == 0, (
+        "single-item chunk must not use reply_media_group"
     )
     caption = query.message.reply_photo.call_args[1].get("caption") or ""
     assert "good_key" in caption, f"surviving caption should mention good_key: {caption!r}"
     assert "fail_key" not in caption
     assert "bad_key" not in caption
+    # Sample-size line is included on the photo caption too.
+    assert "events" in caption, f"caption must include sample-size line: {caption!r}"
 
-    # Trailing back-nav text was sent (sent_count > 0).
-    query.message.reply_text.assert_called_once()
+    # No trailing back-nav text — the edited banner above carries the keyboard.
+    query.message.reply_text.assert_not_called()
