@@ -109,7 +109,7 @@ curl -X POST https://your-server.com/api/v1/track \
     "session_id": "uuid-here",
     "properties": {
       "role": "creator",
-      "interest_set": ["vertical_to_horizontal", "unsure"]
+      "interest": ["vertical_to_horizontal", "unsure"]
     }
   }'
 ```
@@ -119,14 +119,18 @@ Nested objects, nested arrays, and `undefined` are rejected with **422**.
 
 #### Sort behaviour
 
-The server applies **write-time sorting** to arrays whose key ends in
-`_set` (e.g. `interest_set`, `feature_flags_set`). This makes the "most
-common combos" query a trivial `GROUP BY` — `["a","b"]` and `["b","a"]`
-collapse into one bucket without read-time normalisation. Mixed-type
-arrays (e.g. `[1, "a"]`) cannot be compared and are stored as-sent.
+The server **sorts every array property at write time**. There's no
+naming convention to remember — `interest`, `tags`, `flags`, anything
+goes — so `["a", "b"]` and `["b", "a"]` collapse to the same JSONB
+value and the "most common combos" query is a trivial `GROUP BY`
+without read-time normalisation. Mixed-type arrays (e.g. `[1, "a"]`)
+can't be `<`-compared in Python; those fall back to insertion order
+instead of failing the request.
 
-Other array properties keep insertion order, which matters for
-ordered-list semantics like `recent_searches`.
+> **Order-sensitive use cases.** Because every array is sorted, a list
+> like `recent_searches: ["pizza", "pasta"]` loses its original order
+> on the wire. If insertion order matters, serialize to a string
+> (`"pizza,pasta"`) or use an object shape with positional keys.
 
 #### Canonical dashboard queries
 
@@ -138,13 +142,13 @@ complementary dashboards:
 --    interest is selected):
 SELECT elem, count(*) AS n
 FROM events,
-     jsonb_array_elements_text(properties->'interest_set') AS elem
+     jsonb_array_elements_text(properties->'interest') AS elem
 WHERE event_name = 'onboarding_completed'
 GROUP BY elem
 ORDER BY n DESC;
 
 -- 2. Most common combinations of selected values:
-SELECT properties->'interest_set' AS combo, count(*) AS n
+SELECT properties->'interest' AS combo, count(*) AS n
 FROM events
 WHERE event_name = 'onboarding_completed'
 GROUP BY combo
