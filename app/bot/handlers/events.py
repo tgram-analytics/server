@@ -849,5 +849,107 @@ async def _send_event_pie_chart(
 
 
 async def _send_full_pie_charts(query: CallbackQuery, owner_user_id: uuid.UUID) -> None:
-    """Generate one pie chart per property for the current event. Real body lands in Phase 2."""
-    await query.answer("Full Pie Charts coming online…", show_alert=False)
+    """Generate one pie chart per property for the current event."""
+    assert isinstance(query.message, Message)
+    factory = get_session_factory()
+    async with factory() as session:
+        svc = BotStateService(session)
+        state = await svc.get(query.message.chat_id)
+
+        if state is None or state.flow != "events" or state.step != "detail":
+            await query.edit_message_text("❌ Session expired. Use /events to start again.")
+            return
+
+        payload = state.payload or {}
+        project_id_str = payload.get("project_id")
+        event_name = payload.get("event_name")
+
+        if not project_id_str or not event_name:
+            await query.edit_message_text("❌ Session expired. Use /events to start again.")
+            return
+
+        pid = uuid.UUID(project_id_str)
+        project = await get_project(session, pid, owner_user_id)
+        if project is None:
+            await query.edit_message_text("❌ Project not found.")
+            return
+
+        now = datetime.now(UTC)
+        start = now - timedelta(days=30)
+        end = now
+
+        keys = await list_property_keys(
+            session,
+            project_id=pid,
+            event_name=event_name,
+            start=start,
+            end=end,
+        )
+
+        if not keys:
+            await query.answer(f"No properties found for {event_name}.", show_alert=True)
+            return
+
+        # Batch all DB reads inside this session, then close it before
+        # the (slow, HTTP-bound) chart fan-out.
+        key_rows: list[tuple[str, list[dict[str, Any]]]] = []
+        for key in keys:
+            rows = await top_properties(
+                session,
+                project_id=pid,
+                event_name=event_name,
+                property_key=key,
+                start=start,
+                end=end,
+                limit=10,
+            )
+            if rows:
+                key_rows.append((key, rows))
+
+    back_keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("« Back to Events", callback_data="back:events")]]
+    )
+
+    await query.edit_message_text(
+        f"🥧📊 <b>{html.escape(event_name)}</b> · sending {len(key_rows)} chart(s)…",
+        parse_mode="HTML",
+        reply_markup=back_keyboard,
+    )
+
+    if not key_rows:
+        await query.edit_message_text(
+            f"⚠️ No charts could be generated for {html.escape(event_name)}.",
+            parse_mode="HTML",
+            reply_markup=back_keyboard,
+        )
+        return
+
+    # Variant: post Back keyboard as a trailing text message after the loop
+    # so we don't need to predict which photo will be last after possible
+    # ChartGenerationError skips. Cleanly verifiable: exactly one trailing
+    # message with the Back button when sent_count > 0.
+    sent_count = 0
+    for key, rows in key_rows:
+        pie_data = [{"source": r["value"], "count": r["count"]} for r in rows]
+        try:
+            png = await generate_pie_chart(pie_data, title=f"{event_name} · {key}")
+        except ChartGenerationError:
+            continue
+        await query.message.reply_photo(
+            photo=png,
+            caption=f"🥧 {project.name} · {event_name} · {key}",
+        )
+        sent_count += 1
+
+    if sent_count == 0:
+        await query.edit_message_text(
+            f"⚠️ All chart generations failed for {html.escape(event_name)}.",
+            parse_mode="HTML",
+            reply_markup=back_keyboard,
+        )
+        return
+
+    await query.message.reply_text(
+        "« Back to Events",
+        reply_markup=back_keyboard,
+    )
