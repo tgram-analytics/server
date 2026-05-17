@@ -51,7 +51,7 @@ _FONT = "SF Pro Display, SF Pro Text, -apple-system, Roboto, Helvetica Neue, Ari
 
 _PNG_SCALE = 2  # 2x density so charts stay crisp on retina Telegram clients
 _DEFAULT_WIDTH = 720
-_DEFAULT_HEIGHT = 320
+_DEFAULT_HEIGHT = 720
 
 
 @alt.theme.register("telegram", enable=True)
@@ -331,7 +331,7 @@ async def generate_bar_chart(
         )
     )
     chart = (bars + labels).properties(
-        width=_DEFAULT_WIDTH - 100,
+        width=_DEFAULT_WIDTH,
         height=_DEFAULT_HEIGHT,
         title=alt.TitleParams(text=title),
     )
