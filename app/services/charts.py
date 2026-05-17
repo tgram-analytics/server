@@ -64,44 +64,44 @@ def _telegram_theme() -> alt.theme.ThemeConfig:
                 "padding": {"left": 24, "right": 24, "top": 16, "bottom": 16},
                 "title": {
                     "font": _FONT,
-                    "fontSize": 17,
+                    "fontSize": 22,
                     "fontWeight": 700,
                     "color": _INK,
                     "anchor": "start",
-                    "offset": 16,
+                    "offset": 20,
                     "subtitleFont": _FONT,
                     "subtitleColor": _MUTED,
-                    "subtitleFontSize": 11,
+                    "subtitleFontSize": 13,
                     "subtitleFontWeight": 600,
-                    "subtitlePadding": 6,
+                    "subtitlePadding": 8,
                 },
                 "axis": {
                     "labelFont": _FONT,
                     "titleFont": _FONT,
                     "labelColor": _MUTED,
-                    "labelFontSize": 11,
+                    "labelFontSize": 13,
                     "titleColor": _MUTED,
                     "domain": False,
                     "ticks": False,
-                    "labelPadding": 8,
+                    "labelPadding": 10,
                     "gridColor": _GRID,
                     "gridDash": [],
                     "gridWidth": 1,
                 },
                 "axisX": {"grid": False},
-                "axisY": {"tickCount": 4},
+                "axisY": {"tickCount": 5},
                 "legend": {
                     "labelFont": _FONT,
                     "titleFont": _FONT,
                     "labelColor": _INK,
-                    "labelFontSize": 11,
-                    "symbolSize": 80,
-                    "padding": 8,
+                    "labelFontSize": 13,
+                    "symbolSize": 120,
+                    "padding": 12,
                 },
                 "range": {"category": _TG_PALETTE},
                 "bar": {"color": _TG_BLUE, "cornerRadiusEnd": 4},
                 "line": {"color": _TG_BLUE, "strokeWidth": 3},
-                "point": {"color": _TG_BLUE, "filled": True, "size": 70},
+                "point": {"color": _TG_BLUE, "filled": True, "size": 110},
                 "area": {"color": _TG_BLUE, "opacity": 0.18},
             }
         }
@@ -176,10 +176,10 @@ async def generate_line_chart(
         ),
         opacity=0.45,
     )
-    points = base.mark_point(color=_TG_BLUE, filled=True, size=70, stroke="white", strokeWidth=2)
+    points = base.mark_point(color=_TG_BLUE, filled=True, size=110, stroke="white", strokeWidth=2)
     peak_text = (
         alt.Chart(alt.InlineData(values=[peak_label]))
-        .mark_text(dy=-14, font=_FONT, fontSize=12, fontWeight=700, color=_INK)
+        .mark_text(dy=-18, font=_FONT, fontSize=14, fontWeight=700, color=_INK)
         .encode(x=alt.X("date:O", sort=None), y="count:Q", text=alt.Text("count:Q", format=","))
     )
 
@@ -215,7 +215,7 @@ async def generate_comparison_chart(
     chart = (
         alt.Chart(alt.InlineData(values=rows))
         .mark_line(
-            point={"filled": True, "size": 70, "stroke": "white", "strokeWidth": 2},
+            point={"filled": True, "size": 110, "stroke": "white", "strokeWidth": 2},
             strokeWidth=3,
             interpolate="monotone",
         )
@@ -258,7 +258,7 @@ async def generate_multi_line_chart(
     chart = (
         alt.Chart(alt.InlineData(values=rows))
         .mark_line(
-            point={"filled": True, "size": 60, "stroke": "white", "strokeWidth": 2},
+            point={"filled": True, "size": 90, "stroke": "white", "strokeWidth": 2},
             strokeWidth=2.5,
             interpolate="monotone",
         )
@@ -294,7 +294,7 @@ async def generate_bar_chart(
         alt.Chart(alt.InlineData(values=values))
         .mark_bar(
             cornerRadiusEnd=4,
-            height=22,
+            height=56,
             color=alt.Gradient(  # type: ignore[no-untyped-call]
                 gradient="linear",
                 stops=[
@@ -318,9 +318,9 @@ async def generate_bar_chart(
         .mark_text(
             align="left",
             baseline="middle",
-            dx=6,
+            dx=8,
             font=_FONT,
-            fontSize=11,
+            fontSize=13,
             color=_INK,
             fontWeight=600,
         )
@@ -371,14 +371,14 @@ async def generate_pie_chart(
         color=alt.Color(
             "legend:N",
             scale=alt.Scale(range=_TG_PALETTE),
-            legend=alt.Legend(title=None, orient="right"),
+            legend=alt.Legend(title=None, orient="bottom", columns=2, symbolSize=140),
             sort=alt.SortField(field="count", order="descending"),
         ),
         order=alt.Order("count:Q", sort="descending"),
     )
-    arcs = base.mark_arc(innerRadius=70, outerRadius=130, stroke="white", strokeWidth=2)
+    arcs = base.mark_arc(innerRadius=160, outerRadius=270, stroke="white", strokeWidth=2)
     pct_labels = base.mark_text(
-        radius=100, font=_FONT, fontSize=11, fontWeight=700, color="white"
+        radius=215, font=_FONT, fontSize=14, fontWeight=700, color="white"
     ).encode(text="pct:N")
 
     chart = (arcs + pct_labels).properties(
@@ -416,7 +416,7 @@ async def generate_funnel_chart(
 
     bars = (
         alt.Chart(alt.InlineData(values=rows))
-        .mark_bar(cornerRadiusTopLeft=8, cornerRadiusTopRight=8, size=78)
+        .mark_bar(cornerRadiusTopLeft=8, cornerRadiusTopRight=8, size=120)
         .encode(
             x=alt.X("step:N", sort=alt.SortField("order"), axis=alt.Axis(title=None, labelAngle=0)),
             y=alt.Y("count:Q", axis=alt.Axis(title=None)),
@@ -425,12 +425,12 @@ async def generate_funnel_chart(
     )
     text_count = (
         alt.Chart(alt.InlineData(values=rows))
-        .mark_text(dy=-22, font=_FONT, fontSize=12, fontWeight=700, color=_INK)
+        .mark_text(dy=-30, font=_FONT, fontSize=15, fontWeight=700, color=_INK)
         .encode(x=alt.X("step:N", sort=alt.SortField("order")), y="count:Q", text="label:N")
     )
     text_pct = (
         alt.Chart(alt.InlineData(values=rows))
-        .mark_text(dy=-8, font=_FONT, fontSize=10, fontWeight=600, color=_MUTED)
+        .mark_text(dy=-12, font=_FONT, fontSize=12, fontWeight=600, color=_MUTED)
         .encode(x=alt.X("step:N", sort=alt.SortField("order")), y="count:Q", text="pct:N")
     )
     chart = (bars + text_count + text_pct).properties(
