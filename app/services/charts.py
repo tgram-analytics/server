@@ -371,7 +371,17 @@ async def generate_pie_chart(
         color=alt.Color(
             "legend:N",
             scale=alt.Scale(range=_TG_PALETTE),
-            legend=alt.Legend(title=None, orient="bottom", columns=2, symbolSize=140),
+            legend=alt.Legend(
+                title=None,
+                orient="bottom",
+                direction="horizontal",
+                symbolSize=140,
+                labelFontSize=14,
+                labelLimit=200,
+                offset=24,
+                rowPadding=8,
+                columnPadding=24,
+            ),
             sort=alt.SortField(field="count", order="descending"),
         ),
         order=alt.Order("count:Q", sort="descending"),
