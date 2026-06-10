@@ -1,24 +1,15 @@
-"""Tests for the 📦 /export bot handler."""
+"""Tests for the 📦 Export CSV project-menu action."""
 
 import csv
 import io
 import json
+import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 from telegram import Message
 
 ADMIN_ID = 111
-
-
-def _make_message():
-    update = MagicMock()
-    update.effective_chat.id = ADMIN_ID
-    update.effective_user.id = ADMIN_ID
-    update.message.reply_text = AsyncMock()
-    update.callback_query = None
-    ctx = MagicMock()
-    return update, ctx
 
 
 def _make_callback(data: str):
@@ -46,45 +37,37 @@ def _parse_csv(call):
     return list(reader)
 
 
-async def test_export_no_projects(session_factory, singleton_user):
-    """No projects → friendly empty-state message."""
-    from app.bot.handlers.export import export_command
-
-    update, ctx = _make_message()
-    await export_command(update, ctx)
-
-    update.message.reply_text.assert_called_once()
-    text = update.message.reply_text.call_args[0][0]
-    assert "No projects" in text
-
-
-async def test_export_shows_project_picker(session_factory, singleton_user):
-    """With projects → inline keyboard with one button per project + All projects."""
-    from app.bot.handlers.export import export_command
+async def test_project_menu_has_export_button(session_factory, singleton_user):
+    """The project menu offers an Export CSV button with the exp: callback."""
+    from app.bot.handlers.projects import _show_project_menu
     from app.services.projects import create_project
 
     async with session_factory() as session:
         project, _ = await create_project(
             session,
-            name="picker.com",
+            name="menu.com",
             admin_chat_id=ADMIN_ID,
             owner_user_id=singleton_user.id,
         )
         await session.commit()
         pid = project.id
 
-    update, ctx = _make_message()
-    await export_command(update, ctx)
+    query = MagicMock()
+    query.message = MagicMock(spec=Message)
+    query.message.chat_id = ADMIN_ID
+    query.edit_message_text = AsyncMock()
 
-    update.message.reply_text.assert_called_once()
-    keyboard = update.message.reply_text.call_args[1]["reply_markup"]
-    callbacks = [btn.callback_data for row in keyboard.inline_keyboard for btn in row]
-    assert f"exp:{pid}" in callbacks
-    assert "exp:all" in callbacks
+    await _show_project_menu(query, str(pid), singleton_user.id)
+
+    query.edit_message_text.assert_called_once()
+    keyboard = query.edit_message_text.call_args[1]["reply_markup"]
+    buttons = {btn.callback_data: btn.text for row in keyboard.inline_keyboard for btn in row}
+    assert f"exp:{pid}" in buttons
+    assert "Export CSV" in buttons[f"exp:{pid}"]
 
 
 async def test_export_sends_csv_document(session_factory, singleton_user):
-    """Selecting a project sends a CSV document with all event rows."""
+    """exp:<project_id> sends a CSV document with all event rows."""
     from app.bot.handlers.export import export_callback
     from app.services.events import insert_event
     from app.services.projects import create_project
@@ -150,6 +133,11 @@ async def test_export_sends_csv_document(session_factory, singleton_user):
     }
     assert expected_cols <= set(rows[0].keys())
 
+    # Confirmation message links back to the project menu.
+    keyboard = query.edit_message_text.call_args[1]["reply_markup"]
+    callbacks = [btn.callback_data for row in keyboard.inline_keyboard for btn in row]
+    assert f"proj:{pid}" in callbacks
+
 
 async def test_export_empty_project(session_factory, singleton_user):
     """Project with no events → message instead of a document."""
@@ -175,58 +163,8 @@ async def test_export_empty_project(session_factory, singleton_user):
     assert "no events" in text.lower()
 
 
-async def test_export_all_projects(session_factory, singleton_user):
-    """exp:all sends one CSV per project that has events."""
-    from app.bot.handlers.export import export_callback
-    from app.services.events import insert_event
-    from app.services.projects import create_project
-
-    async with session_factory() as session:
-        first, _ = await create_project(
-            session,
-            name="one.com",
-            admin_chat_id=ADMIN_ID,
-            owner_user_id=singleton_user.id,
-        )
-        second, _ = await create_project(
-            session,
-            name="two.com",
-            admin_chat_id=ADMIN_ID,
-            owner_user_id=singleton_user.id,
-        )
-        # Third project with no events should be skipped, not exported.
-        await create_project(
-            session,
-            name="silent.com",
-            admin_chat_id=ADMIN_ID,
-            owner_user_id=singleton_user.id,
-        )
-        await session.commit()
-
-        for project in (first, second):
-            await insert_event(
-                session,
-                project_id=project.id,
-                event_name="pageview",
-                session_id="s1",
-                properties={},
-                timestamp=datetime.now(UTC),
-            )
-        await session.commit()
-
-    update, ctx, query = _make_callback("exp:all")
-    await export_callback(update, ctx)
-
-    assert query.message.reply_document.call_count == 2
-    filenames = [c.kwargs["filename"] for c in query.message.reply_document.call_args_list]
-    assert any("one.com" in f for f in filenames)
-    assert any("two.com" in f for f in filenames)
-
-
 async def test_export_unknown_project(session_factory, singleton_user):
     """Unknown project id → error message, no document."""
-    import uuid
-
     from app.bot.handlers.export import export_callback
 
     update, ctx, query = _make_callback(f"exp:{uuid.uuid4()}")
@@ -235,3 +173,15 @@ async def test_export_unknown_project(session_factory, singleton_user):
     query.message.reply_document.assert_not_called()
     query.edit_message_text.assert_called_once()
     assert "not found" in query.edit_message_text.call_args[0][0].lower()
+
+
+async def test_export_invalid_target(session_factory, singleton_user):
+    """Malformed callback data → error message, no document."""
+    from app.bot.handlers.export import export_callback
+
+    update, ctx, query = _make_callback("exp:not-a-uuid")
+    await export_callback(update, ctx)
+
+    query.message.reply_document.assert_not_called()
+    query.edit_message_text.assert_called_once()
+    assert "invalid" in query.edit_message_text.call_args[0][0].lower()

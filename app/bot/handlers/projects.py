@@ -392,6 +392,7 @@ async def _show_project_menu(
             ],
             [
                 InlineKeyboardButton("⚙️ Settings", callback_data=f"menu:settings:{project_id_str}"),
+                InlineKeyboardButton("📦 Export CSV", callback_data=f"exp:{project_id_str}"),
             ],
             [
                 InlineKeyboardButton("🗑 Delete", callback_data=f"del_ask:{project_id_str}"),
