@@ -19,6 +19,7 @@ _HELP_TEXT = (
     "/digest — weekly summary (events, sessions, top events, deltas) across all projects\n"
     "/alerts — list all active alerts across all projects\n"
     "/doctor — run a health check across all your projects\n"
+    "/export — export raw event data as CSV (per project or all)\n"
     "/help — show this message\n"
     "/cancel — cancel the current operation\n\n"
     "💡 <b>Tip:</b> Charts support period switching and period-over-period comparison"

@@ -36,6 +36,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     from app.bot.handlers.digest import digest_command
     from app.bot.handlers.doctor import doctor_command
     from app.bot.handlers.events import events_callback, events_command
+    from app.bot.handlers.export import export_callback, export_command
     from app.bot.handlers.funnels import funnel_callback
     from app.bot.handlers.onboarding import onboarding_callback
     from app.bot.handlers.overview import overview_command
@@ -82,12 +83,14 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     app.add_handler(CommandHandler("overview", overview_command, filters=admin_filter))
     app.add_handler(CommandHandler("alerts", alerts_command, filters=admin_filter))
     app.add_handler(CommandHandler("doctor", doctor_command, filters=admin_filter))
+    app.add_handler(CommandHandler("export", export_command, filters=admin_filter))
 
     # Callback queries don't support CommandHandler filters directly — we
     # guard inside the handler using the same admin_chat_id check.
     # Pattern-matched handlers first, then catch-all project callbacks.
     app.add_handler(CallbackQueryHandler(alert_callback, pattern=r"^(alert_|back:alerts:)"))
     app.add_handler(CallbackQueryHandler(events_callback, pattern=r"^(evt[a:]|back:events)"))
+    app.add_handler(CallbackQueryHandler(export_callback, pattern=r"^exp:"))
     app.add_handler(CallbackQueryHandler(funnel_callback, pattern=r"^(fnl_|back:funnels:)"))
     app.add_handler(CallbackQueryHandler(onboarding_callback, pattern=r"^onb:"))
     app.add_handler(CallbackQueryHandler(project_callback))
@@ -144,6 +147,7 @@ async def init_bot(token: str, admin_chat_id: int, webhook_base_url: str = "") -
             BotCommand("alerts", "List active alerts"),
             BotCommand("add", "Create a new project"),
             BotCommand("doctor", "Health check across all projects"),
+            BotCommand("export", "Export raw event data as CSV"),
             BotCommand("help", "Show help"),
             BotCommand("cancel", "Cancel current operation"),
         ]
