@@ -15,6 +15,7 @@ from app.models.alert import Alert
 from app.models.event import Event
 from app.models.project import Project
 from app.models.user import User
+from app.services.kpis import list_kpis
 from app.services.projects import list_projects
 
 
@@ -34,29 +35,17 @@ async def _project_digest_lines(
     project: Project,
     now: datetime,
 ) -> list[str]:
-    """Return HTML lines describing the last-7-days digest for one project."""
+    """Return HTML lines describing the last-7-days digest for one project.
+
+    Order: North Star → Visitors → Sessions → Pageviews → pinned KPIs →
+    alerted events not already shown as KPIs.
+    """
     week_ago = now - timedelta(days=7)
     two_weeks_ago = now - timedelta(days=14)
 
-    sessions_curr = (
-        await session.execute(
-            select(func.count(func.distinct(Event.session_id)))
-            .select_from(Event)
-            .where(Event.project_id == project.id, Event.timestamp >= week_ago)
-        )
-    ).scalar_one()
-
-    sessions_prev = (
-        await session.execute(
-            select(func.count(func.distinct(Event.session_id)))
-            .select_from(Event)
-            .where(
-                Event.project_id == project.id,
-                Event.timestamp >= two_weeks_ago,
-                Event.timestamp < week_ago,
-            )
-        )
-    ).scalar_one()
+    kpis = await list_kpis(session, project_id=project.id)
+    north_star = next((k for k in kpis if k.is_north_star), None)
+    pinned = [k for k in kpis if not k.is_north_star]
 
     alerted_names = list(
         (
@@ -68,48 +57,97 @@ async def _project_digest_lines(
         ).scalars()
     )
 
-    lines = [
-        f"📦 <b>{html.escape(project.name)}</b>",
-        f"  👤 Sessions: <b>{sessions_curr:,}</b>  {_format_delta(sessions_curr, sessions_prev)}",
-    ]
-
-    if not alerted_names:
-        lines.append("  💤 No alerts — set one with /alerts to track core events")
-        return lines
-
-    counts_rows = (
-        await session.execute(
-            select(
-                Event.event_name,
-                func.sum(case((Event.timestamp >= week_ago, 1), else_=0)).label("curr"),
-                func.sum(
-                    case(
-                        (
-                            (Event.timestamp >= two_weeks_ago) & (Event.timestamp < week_ago),
-                            1,
-                        ),
-                        else_=0,
-                    )
-                ).label("prev"),
+    async def _distinct_counts(column) -> tuple[int, int]:
+        curr = (
+            await session.execute(
+                select(func.count(func.distinct(column)))
+                .select_from(Event)
+                .where(Event.project_id == project.id, Event.timestamp >= week_ago)
             )
-            .where(
-                Event.project_id == project.id,
-                Event.event_name.in_(alerted_names),
-                Event.timestamp >= two_weeks_ago,
+        ).scalar_one()
+        prev = (
+            await session.execute(
+                select(func.count(func.distinct(column)))
+                .select_from(Event)
+                .where(
+                    Event.project_id == project.id,
+                    Event.timestamp >= two_weeks_ago,
+                    Event.timestamp < week_ago,
+                )
             )
-            .group_by(Event.event_name)
+        ).scalar_one()
+        return curr, prev
+
+    visitors_curr, visitors_prev = await _distinct_counts(Event.visitor_hash)
+    sessions_curr, sessions_prev = await _distinct_counts(Event.session_id)
+
+    # One grouped query covers pageviews, all pinned KPIs, and alerted events.
+    tracked_names = {"pageview", *(k.event_name for k in kpis), *alerted_names}
+    counts: dict[str, tuple[int, int]] = {}
+    if tracked_names:
+        counts_rows = (
+            await session.execute(
+                select(
+                    Event.event_name,
+                    func.sum(case((Event.timestamp >= week_ago, 1), else_=0)).label("curr"),
+                    func.sum(
+                        case(
+                            (
+                                (Event.timestamp >= two_weeks_ago) & (Event.timestamp < week_ago),
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ).label("prev"),
+                )
+                .where(
+                    Event.project_id == project.id,
+                    Event.event_name.in_(tracked_names),
+                    Event.timestamp >= two_weeks_ago,
+                )
+                .group_by(Event.event_name)
+            )
+        ).all()
+        counts = {row.event_name: (int(row.curr or 0), int(row.prev or 0)) for row in counts_rows}
+
+    lines = [f"📦 <b>{html.escape(project.name)}</b>"]
+
+    if north_star is not None:
+        curr, prev = counts.get(north_star.event_name, (0, 0))
+        lines.append(
+            f"  ⭐ {html.escape(north_star.event_name)}: <b>{curr:,}</b>"
+            f"  {_format_delta(curr, prev)}"
         )
-    ).all()
 
-    counts: dict[str, tuple[int, int]] = {
-        row.event_name: (int(row.curr or 0), int(row.prev or 0)) for row in counts_rows
-    }
+    lines.append(
+        f"  👥 Visitors: <b>{visitors_curr:,}</b>  {_format_delta(visitors_curr, visitors_prev)}"
+    )
+    lines.append(
+        f"  👤 Sessions: <b>{sessions_curr:,}</b>  {_format_delta(sessions_curr, sessions_prev)}"
+    )
 
-    rows = [(name, *counts.get(name, (0, 0))) for name in alerted_names]
+    pv_curr, pv_prev = counts.get("pageview", (0, 0))
+    pageviews_shown = pv_curr > 0 or pv_prev > 0
+    if pageviews_shown:
+        lines.append(f"  📄 Pageviews: <b>{pv_curr:,}</b>  {_format_delta(pv_curr, pv_prev)}")
+
+    for kpi in pinned:
+        curr, prev = counts.get(kpi.event_name, (0, 0))
+        lines.append(
+            f"  🎯 {html.escape(kpi.event_name)}: <b>{curr:,}</b>  {_format_delta(curr, prev)}"
+        )
+
+    shown = {k.event_name for k in kpis}
+    if pageviews_shown:
+        shown.add("pageview")
+    remaining = [n for n in alerted_names if n not in shown]
+    rows = [(name, *counts.get(name, (0, 0))) for name in remaining]
     rows.sort(key=lambda r: (-r[1], r[0]))
-
     for name, curr, prev in rows:
         lines.append(f"  🎯 {html.escape(name)}: <b>{curr:,}</b>  {_format_delta(curr, prev)}")
+
+    if north_star is None:
+        lines.append("  💤 Pin your North Star with the 🎯 KPIs button in /projects")
 
     return lines
 
