@@ -38,6 +38,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     from app.bot.handlers.events import events_callback, events_command
     from app.bot.handlers.export import export_callback
     from app.bot.handlers.funnels import funnel_callback
+    from app.bot.handlers.kpis import kpi_callback
     from app.bot.handlers.onboarding import onboarding_callback
     from app.bot.handlers.overview import overview_command
     from app.bot.handlers.projects import add_command, project_callback, projects_command
@@ -91,6 +92,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     app.add_handler(CallbackQueryHandler(events_callback, pattern=r"^(evt[a:]|back:events)"))
     app.add_handler(CallbackQueryHandler(export_callback, pattern=r"^exp:"))
     app.add_handler(CallbackQueryHandler(funnel_callback, pattern=r"^(fnl_|back:funnels:)"))
+    app.add_handler(CallbackQueryHandler(kpi_callback, pattern=r"^(kpi_|back:kpis:)"))
     app.add_handler(CallbackQueryHandler(onboarding_callback, pattern=r"^onb:"))
     app.add_handler(CallbackQueryHandler(project_callback))
 

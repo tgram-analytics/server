@@ -5,6 +5,9 @@ real test DB; handler tests use fake Update/CallbackQuery objects.
 """
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock
+
+from telegram import Message
 
 ADMIN_ID = 111
 
@@ -206,3 +209,120 @@ async def test_digest_pinned_kpi_with_zero_events_still_renders(
 
     text = "\n".join(lines)
     assert "⭐ never_fired: <b>0</b>" in text
+
+
+# ── KPI handler tests ─────────────────────────────────────────────────────────
+
+
+def _make_kpi_callback(data: str):
+    update = MagicMock()
+    update.effective_user.id = ADMIN_ID
+    update.effective_chat.id = ADMIN_ID
+    update.callback_query.data = data
+    update.callback_query.message = MagicMock(spec=Message)
+    update.callback_query.message.chat_id = ADMIN_ID
+    update.callback_query.answer = AsyncMock()
+    update.callback_query.edit_message_text = AsyncMock()
+    ctx = MagicMock()
+    return update, ctx
+
+
+async def test_kpis_menu_lists_kpis_with_star(db_session, session_factory, singleton_user):
+    from app.bot.handlers.kpis import show_kpis_menu
+    from app.services.kpis import add_kpi, set_north_star
+
+    async with session_factory() as session:
+        project = await _make_project(session, singleton_user, name="kpi-menu.com")
+        await set_north_star(session, project_id=project.id, event_name="signup")
+        await add_kpi(session, project_id=project.id, event_name="checkout")
+        await session.commit()
+        project_id = project.id
+
+    query = MagicMock()
+    query.edit_message_text = AsyncMock()
+    await show_kpis_menu(query, str(project_id), singleton_user.id)
+
+    query.edit_message_text.assert_awaited_once()
+    kwargs = query.edit_message_text.await_args.kwargs
+    keyboard = kwargs["reply_markup"].inline_keyboard
+    labels = [btn.text for row in keyboard for btn in row]
+    assert any(label.startswith("⭐") and "signup" in label for label in labels)
+    assert any(label.startswith("🎯") and "checkout" in label for label in labels)
+    assert any("Add KPI" in label for label in labels)
+
+
+async def test_kpi_star_callback_sets_north_star(db_session, session_factory, singleton_user):
+    from app.bot.handlers.kpis import kpi_callback
+    from app.services.kpis import add_kpi, list_kpis
+
+    async with session_factory() as session:
+        project = await _make_project(session, singleton_user, name="kpi-star.com")
+        kpi = await add_kpi(session, project_id=project.id, event_name="signup")
+        await session.commit()
+        kpi_id, project_id = kpi.id, project.id
+
+    update, ctx = _make_kpi_callback(f"kpi_star:{kpi_id}")
+    await kpi_callback(update, ctx)
+
+    async with session_factory() as session:
+        kpis = await list_kpis(session, project_id=project_id)
+        assert kpis[0].event_name == "signup"
+        assert kpis[0].is_north_star
+
+
+async def test_kpi_del_callback_removes_kpi(db_session, session_factory, singleton_user):
+    from app.bot.handlers.kpis import kpi_callback
+    from app.services.kpis import add_kpi, list_kpis
+
+    async with session_factory() as session:
+        project = await _make_project(session, singleton_user, name="kpi-del.com")
+        kpi = await add_kpi(session, project_id=project.id, event_name="signup")
+        await session.commit()
+        kpi_id, project_id = kpi.id, project.id
+
+    update, ctx = _make_kpi_callback(f"kpi_del:{kpi_id}")
+    await kpi_callback(update, ctx)
+
+    async with session_factory() as session:
+        assert await list_kpis(session, project_id=project_id) == []
+
+
+async def test_kpi_add_flow_pins_event(db_session, session_factory, singleton_user):
+    from app.bot.handlers.kpis import kpi_callback
+    from app.services.kpis import list_kpis
+
+    async with session_factory() as session:
+        project = await _make_project(session, singleton_user, name="kpi-add.com")
+        await _seed_event(session, project.id, "purchase", days_ago=1, n=2)
+        await session.commit()
+        project_id = project.id
+
+    # Step 1: open the event picker (saves conversation state).
+    update, ctx = _make_kpi_callback(f"kpi_add:{project_id}")
+    await kpi_callback(update, ctx)
+
+    # Step 2: pick the event.
+    update, ctx = _make_kpi_callback("kpi_evt:purchase")
+    await kpi_callback(update, ctx)
+
+    async with session_factory() as session:
+        kpis = await list_kpis(session, project_id=project_id)
+        assert [k.event_name for k in kpis] == ["purchase"]
+
+
+async def test_project_menu_has_kpis_button(db_session, session_factory, singleton_user):
+    from app.bot.handlers.projects import _show_project_menu
+
+    async with session_factory() as session:
+        project = await _make_project(session, singleton_user, name="kpi-btn.com")
+        await session.commit()
+        project_id = project.id
+
+    query = MagicMock()
+    query.edit_message_text = AsyncMock()
+    await _show_project_menu(query, str(project_id), singleton_user.id)
+
+    kwargs = query.edit_message_text.await_args.kwargs
+    keyboard = kwargs["reply_markup"].inline_keyboard
+    callbacks = [btn.callback_data for row in keyboard for btn in row]
+    assert f"menu:kpis:{project_id}" in callbacks
