@@ -599,6 +599,152 @@ async def test_alert_notification_message_varies_by_condition(
     assert "times" in text
 
 
+async def test_alert_notification_includes_more_charts_button(
+    db_session, session_factory, singleton_user
+):
+    """The notification keyboard exposes a '📊 More charts' button → alert_pie:{id}."""
+    from app.api.ingestion import _run_alert_evaluation
+    from app.services.alerts import create_alert
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="charts-btn.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        alert = await create_alert(
+            session,
+            project_id=project.id,
+            event_name="abandon_reason",
+            condition=AlertCondition.every,
+        )
+        await session.commit()
+        pid = project.id
+        aid = str(alert.id)
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+
+    with (
+        patch("app.api.ingestion.get_session_factory", return_value=session_factory),
+        patch("app.bot.setup.get_bot", return_value=mock_bot),
+    ):
+        await _run_alert_evaluation(pid, "abandon_reason", {"reason": "price"})
+
+    mock_bot.send_message.assert_called_once()
+    keyboard = mock_bot.send_message.call_args[1]["reply_markup"]
+    buttons = {btn.text: btn.callback_data for row in keyboard.inline_keyboard for btn in row}
+    assert buttons.get("📊 More charts") == f"alert_pie:{aid}"
+    # Existing buttons are still present.
+    assert f"alert_sil:{aid}" in buttons.values()
+    assert f"alert_dis:{aid}" in buttons.values()
+
+
+async def test_alert_pie_callback_sends_line_and_pie_charts(session_factory, singleton_user):
+    """alert_pie:{id} replies with a media group: 7d line chart + one pie per property."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.bot.handlers.alerts import alert_callback
+    from app.services.alerts import create_alert
+    from app.services.events import insert_event
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="pie-notify.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        alert = await create_alert(
+            session,
+            project_id=project.id,
+            event_name="abandon_reason",
+            condition=AlertCondition.every,
+        )
+        seed = [{"reason": "price"}, {"reason": "price"}, {"reason": "ux"}]
+        for i, props in enumerate(seed):
+            await insert_event(
+                session,
+                project_id=project.id,
+                event_name="abandon_reason",
+                session_id=f"s{i}",
+                properties=props,
+                timestamp=datetime.now(UTC) - timedelta(hours=i + 1),
+            )
+        await session.commit()
+        aid = str(alert.id)
+
+    update, ctx = _make_callback(chat_id=ADMIN_ID, data=f"alert_pie:{aid}")
+    update.callback_query.message.reply_photo = AsyncMock()
+    update.callback_query.message.reply_media_group = AsyncMock()
+
+    with (
+        patch(
+            "app.bot.handlers.alerts.generate_line_chart",
+            new=AsyncMock(return_value=b"LINE_PNG"),
+        ),
+        patch(
+            "app.bot.handlers.alerts.generate_pie_chart",
+            new=AsyncMock(return_value=b"PIE_PNG"),
+        ),
+    ):
+        await alert_callback(update, ctx)
+
+    # Line chart + one pie (single property) → one two-item media group.
+    msg = update.callback_query.message
+    assert msg.reply_media_group.call_count == 1
+    assert msg.reply_photo.call_count == 0
+    media = msg.reply_media_group.call_args[1].get("media")
+    assert media is not None and len(media) == 2
+    captions = " | ".join(m.caption or "" for m in media)
+    assert "last 7 days" in captions
+    assert "reason" in captions
+    assert "3 events" in captions
+    # The notification message itself is left untouched.
+    update.callback_query.edit_message_text.assert_not_called()
+
+
+async def test_alert_pie_callback_no_data_shows_popup(session_factory, singleton_user):
+    """alert_pie with no event data answers with a popup instead of sending charts."""
+    from app.bot.handlers.alerts import alert_callback
+    from app.services.alerts import create_alert
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="pie-empty.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        alert = await create_alert(
+            session,
+            project_id=project.id,
+            event_name="ghost_event",
+            condition=AlertCondition.every,
+        )
+        await session.commit()
+        aid = str(alert.id)
+
+    update, ctx = _make_callback(chat_id=ADMIN_ID, data=f"alert_pie:{aid}")
+    update.callback_query.message.reply_photo = AsyncMock()
+    update.callback_query.message.reply_media_group = AsyncMock()
+
+    await alert_callback(update, ctx)
+
+    msg = update.callback_query.message
+    msg.reply_photo.assert_not_called()
+    msg.reply_media_group.assert_not_called()
+    popup_calls = [
+        c for c in update.callback_query.answer.call_args_list if c.kwargs.get("show_alert")
+    ]
+    assert popup_calls, "expected a show_alert popup when no chart data exists"
+    assert "ghost_event" in (popup_calls[0].args[0] if popup_calls[0].args else "")
+
+
 async def test_no_notification_when_no_alerts_fire(db_session, session_factory, singleton_user):
     """No notification sent if no alerts match or fire."""
     from app.api.ingestion import _run_alert_evaluation

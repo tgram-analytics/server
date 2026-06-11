@@ -4,9 +4,18 @@ from __future__ import annotations
 
 import html
 import uuid
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
+from telegram import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputMediaPhoto,
+    Message,
+    Update,
+)
 from telegram.ext import ContextTypes
 
 from app.bot.auth import requires_user
@@ -24,6 +33,8 @@ from app.services.alerts import (
     mute_alert,
     toggle_alert,
 )
+from app.services.analytics import events_over_time, list_property_keys, top_properties
+from app.services.charts import ChartGenerationError, generate_line_chart, generate_pie_chart
 from app.services.projects import get_project
 
 
@@ -176,6 +187,10 @@ async def alert_callback(
     elif data.startswith("alert_dis:"):
         alert_id_str = data[10:]
         await _disable_alert_from_notification(query, alert_id_str, owner_user_id)
+
+    elif data.startswith("alert_pie:"):
+        alert_id_str = data[10:]
+        await _send_charts_from_notification(query, alert_id_str, owner_user_id)
 
     elif data == "alert_noop":
         pass
@@ -519,3 +534,98 @@ async def _disable_alert_from_notification(
 
     await query.answer("🚫 Alert disabilitato.", show_alert=False)
     await query.edit_message_reply_markup(reply_markup=None)
+
+
+async def _send_charts_from_notification(
+    query: CallbackQuery, alert_id_str: str, owner_user_id: uuid.UUID
+) -> None:
+    """Send charts for the alert's event as replies to the notification message.
+
+    Sends a 7-day line chart plus one pie chart per property key (30-day
+    window, top 10 values), bundled into Telegram media groups.
+    """
+    assert isinstance(query.message, Message)
+    factory = get_session_factory()
+    async with factory() as session:
+        alert = await get_alert(session, uuid.UUID(alert_id_str))
+        if alert is None:
+            await query.answer("Alert not found.", show_alert=True)
+            return
+        # Verify the alert belongs to a project owned by this user.
+        project = await get_project(session, alert.project_id, owner_user_id)
+        if project is None:
+            await query.answer("Alert not found.", show_alert=True)
+            return
+
+        event_name = alert.event_name
+        now = datetime.now(UTC)
+
+        line_data = await events_over_time(
+            session,
+            project_id=project.id,
+            event_name=event_name,
+            start=now - timedelta(days=7),
+            end=now,
+            granularity="day",
+        )
+
+        # Batch all DB reads inside this session, then close it before
+        # the (slow, CPU-bound) chart fan-out.
+        pie_start = now - timedelta(days=30)
+        keys = await list_property_keys(
+            session,
+            project_id=project.id,
+            event_name=event_name,
+            start=pie_start,
+            end=now,
+        )
+        key_rows: list[tuple[str, list[dict[str, Any]]]] = []
+        for key in keys:
+            rows = await top_properties(
+                session,
+                project_id=project.id,
+                event_name=event_name,
+                property_key=key,
+                start=pie_start,
+                end=now,
+                limit=10,
+            )
+            if rows:
+                key_rows.append((key, rows))
+
+    items: list[tuple[bytes, str]] = []
+    if line_data:
+        try:
+            png = await generate_line_chart(
+                line_data,
+                title=event_name,
+                period_label="last 7 days",
+            )
+            items.append((png, f"📈 {project.name} · {event_name} · last 7 days"))
+        except ChartGenerationError:
+            pass
+
+    for key, rows in key_rows:
+        pie_data = [{"source": r["value"], "count": r["count"]} for r in rows]
+        try:
+            png = await generate_pie_chart(pie_data, title=f"{event_name} · {key}")
+        except ChartGenerationError:
+            continue
+        total = sum(int(r["count"]) for r in rows)
+        items.append((png, f"🥧 {project.name} · {event_name} · {key}\n📈 {total:,} events"))
+
+    if not items:
+        await query.answer(f"No chart data yet for {event_name}.", show_alert=True)
+        return
+
+    # Telegram requires a media group to have 2-10 items. Chunk by 10, and
+    # fall back to reply_photo when a chunk has only 1 item.
+    for chunk_start in range(0, len(items), 10):
+        chunk = items[chunk_start : chunk_start + 10]
+        if len(chunk) == 1:
+            png, caption = chunk[0]
+            await query.message.reply_photo(photo=png, caption=caption)
+        else:
+            await query.message.reply_media_group(
+                media=[InputMediaPhoto(media=p, caption=c) for p, c in chunk]
+            )
