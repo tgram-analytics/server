@@ -636,7 +636,10 @@ async def test_alert_notification_includes_more_charts_button(
     mock_bot.send_message.assert_called_once()
     keyboard = mock_bot.send_message.call_args[1]["reply_markup"]
     buttons = {btn.text: btn.callback_data for row in keyboard.inline_keyboard for btn in row}
-    assert buttons.get("📊 More charts") == f"alert_pie:{aid}"
+    # The event carries a custom property, so the callback also embeds a
+    # token resolving to the property keys to prioritize.
+    charts_cb = buttons.get("📊 More charts")
+    assert charts_cb is not None and charts_cb.startswith(f"alert_pie:{aid}:")
     # Existing buttons are still present.
     assert f"alert_sil:{aid}" in buttons.values()
     assert f"alert_dis:{aid}" in buttons.values()
@@ -705,6 +708,97 @@ async def test_alert_pie_callback_sends_line_and_pie_charts(session_factory, sin
     assert "3 events" in captions
     # The notification message itself is left untouched.
     update.callback_query.edit_message_text.assert_not_called()
+
+
+async def test_alert_pie_prioritizes_triggering_event_properties(session_factory, singleton_user):
+    """The pie chart for the notification's own property leads the album.
+
+    Full flow: the notification embeds a token with the triggering event's
+    property keys ("reason"); tapping the button must send the reason pie
+    first, then the line chart, then pies for other historical properties
+    ("plan"). Meta keys ($timezone) never get a priority pie.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from app.api.ingestion import _run_alert_evaluation
+    from app.bot.handlers.alerts import alert_callback
+    from app.services.alerts import create_alert
+    from app.services.events import insert_event
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="pie-priority.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        await create_alert(
+            session,
+            project_id=project.id,
+            event_name="abandon_reason",
+            condition=AlertCondition.every,
+        )
+        # "plan" sorts before "reason" alphabetically, so a leading reason
+        # pie proves the priority ordering (not list_property_keys order).
+        seed = [
+            {"reason": "price", "plan": "pro"},
+            {"reason": "ux", "plan": "free"},
+        ]
+        for i, props in enumerate(seed):
+            await insert_event(
+                session,
+                project_id=project.id,
+                event_name="abandon_reason",
+                session_id=f"s{i}",
+                properties=props,
+                timestamp=datetime.now(UTC) - timedelta(hours=i + 1),
+            )
+        await session.commit()
+        pid = project.id
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+    with (
+        patch("app.api.ingestion.get_session_factory", return_value=session_factory),
+        patch("app.bot.setup.get_bot", return_value=mock_bot),
+    ):
+        await _run_alert_evaluation(
+            pid, "abandon_reason", {"$timezone": "Europe/Chisinau", "reason": "price"}
+        )
+
+    keyboard = mock_bot.send_message.call_args[1]["reply_markup"]
+    charts_cb = next(
+        btn.callback_data
+        for row in keyboard.inline_keyboard
+        for btn in row
+        if btn.text == "📊 More charts"
+    )
+
+    update, ctx = _make_callback(chat_id=ADMIN_ID, data=charts_cb)
+    update.callback_query.message.reply_photo = AsyncMock()
+    update.callback_query.message.reply_media_group = AsyncMock()
+
+    with (
+        patch(
+            "app.bot.handlers.alerts.generate_line_chart",
+            new=AsyncMock(return_value=b"LINE_PNG"),
+        ),
+        patch(
+            "app.bot.handlers.alerts.generate_pie_chart",
+            new=AsyncMock(return_value=b"PIE_PNG"),
+        ),
+    ):
+        await alert_callback(update, ctx)
+
+    msg = update.callback_query.message
+    assert msg.reply_media_group.call_count == 1
+    media = msg.reply_media_group.call_args[1].get("media")
+    captions = [m.caption or "" for m in media]
+    assert len(captions) == 3, f"expected reason pie + line + plan pie; got {captions}"
+    assert "reason" in captions[0], f"reason pie must lead the album: {captions}"
+    assert "last 7 days" in captions[1]
+    assert "plan" in captions[2]
 
 
 async def test_alert_pie_callback_no_data_shows_popup(session_factory, singleton_user):

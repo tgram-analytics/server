@@ -159,9 +159,17 @@ async def _run_alert_evaluation(
                             )
                         ]
                     )
-                rows.append(
-                    [InlineKeyboardButton("📊 More charts", callback_data=f"alert_pie:{aid}")]
-                )
+                # Carry the triggering event's own property keys through a
+                # cache token so the chart handler can put their pie charts
+                # first. Falls back to plain alert_pie:{id} when there are
+                # no custom properties (or the token has expired).
+                charts_cb = f"alert_pie:{aid}"
+                prop_keys = [str(k) for k in (properties or {}) if not str(k).startswith("$")]
+                if prop_keys:
+                    from app.bot.event_meta_cache import store as _store_keys
+
+                    charts_cb = f"alert_pie:{aid}:{_store_keys(','.join(prop_keys))}"
+                rows.append([InlineKeyboardButton("📊 More charts", callback_data=charts_cb)])
                 rows.append(
                     [
                         InlineKeyboardButton("🔕 Silence", callback_data=f"alert_sil:{aid}"),
