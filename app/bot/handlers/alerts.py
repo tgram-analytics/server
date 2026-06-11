@@ -189,8 +189,14 @@ async def alert_callback(
         await _disable_alert_from_notification(query, alert_id_str, owner_user_id)
 
     elif data.startswith("alert_pie:"):
-        alert_id_str = data[10:]
-        await _send_charts_from_notification(query, alert_id_str, owner_user_id)
+        rest = data[10:]  # "{alert_id}" or "{alert_id}:{keys_token}"
+        if ":" in rest:
+            alert_id_str, keys_token = rest.split(":", 1)
+        else:
+            alert_id_str, keys_token = rest, None
+        await _send_charts_from_notification(
+            query, alert_id_str, owner_user_id, keys_token=keys_token
+        )
 
     elif data == "alert_noop":
         pass
@@ -577,13 +583,24 @@ async def _disable_alert_from_notification(
 
 
 async def _send_charts_from_notification(
-    query: CallbackQuery, alert_id_str: str, owner_user_id: uuid.UUID
+    query: CallbackQuery, alert_id_str: str, owner_user_id: uuid.UUID, keys_token: str | None = None
 ) -> None:
     """Send charts for the alert's event as replies to the notification message.
 
     Sends a 7-day line chart plus one pie chart per property key (30-day
     window, top 10 values), bundled into Telegram media groups.
+
+    ``keys_token`` resolves (via the event-meta cache) to the property keys
+    carried by the triggering event; their pie charts are sent first, ahead
+    of the line chart and pies for the event's other historical properties.
     """
+    priority_keys: list[str] = []
+    if keys_token:
+        from app.bot.event_meta_cache import get as _get_keys
+
+        stored = _get_keys(keys_token)
+        if stored:
+            priority_keys = [k for k in stored.split(",") if k]
     assert isinstance(query.message, Message)
     factory = get_session_factory()
     async with factory() as session:
@@ -619,6 +636,13 @@ async def _send_charts_from_notification(
             start=pie_start,
             end=now,
         )
+        # The triggering event's own properties come first, in notification
+        # order; the event's other historical properties follow.
+        if priority_keys:
+            key_set = set(keys)
+            front = [k for k in priority_keys if k in key_set]
+            keys = front + [k for k in keys if k not in set(front)]
+
         key_rows: list[tuple[str, list[dict[str, Any]]]] = []
         for key in keys:
             rows = await top_properties(
@@ -633,18 +657,9 @@ async def _send_charts_from_notification(
             if rows:
                 key_rows.append((key, rows))
 
-    items: list[tuple[bytes, str]] = []
-    if line_data:
-        try:
-            png = await generate_line_chart(
-                line_data,
-                title=event_name,
-                period_label="last 7 days",
-            )
-            items.append((png, f"📈 {project.name} · {event_name} · last 7 days"))
-        except ChartGenerationError:
-            pass
-
+    priority_set = set(priority_keys)
+    priority_pies: list[tuple[bytes, str]] = []
+    other_pies: list[tuple[bytes, str]] = []
     for key, rows in key_rows:
         pie_data = [{"source": r["value"], "count": r["count"]} for r in rows]
         try:
@@ -652,7 +667,22 @@ async def _send_charts_from_notification(
         except ChartGenerationError:
             continue
         total = sum(int(r["count"]) for r in rows)
-        items.append((png, f"🥧 {project.name} · {event_name} · {key}\n📈 {total:,} events"))
+        caption = f"🥧 {project.name} · {event_name} · {key}\n📈 {total:,} events"
+        (priority_pies if key in priority_set else other_pies).append((png, caption))
+
+    line_items: list[tuple[bytes, str]] = []
+    if line_data:
+        try:
+            png = await generate_line_chart(
+                line_data,
+                title=event_name,
+                period_label="last 7 days",
+            )
+            line_items.append((png, f"📈 {project.name} · {event_name} · last 7 days"))
+        except ChartGenerationError:
+            pass
+
+    items = priority_pies + line_items + other_pies
 
     if not items:
         await query.answer(f"No chart data yet for {event_name}.", show_alert=True)
