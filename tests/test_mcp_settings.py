@@ -9,6 +9,10 @@ def _settings(**overrides) -> Settings:
         admin_chat_id=1,
         database_url="sqlite+aiosqlite://",
         secret_key="x" * 32,
+        # Pin explicitly so an ambient WEBHOOK_BASE_URL leaked into
+        # os.environ by an earlier test can't bleed into these cases —
+        # explicit init kwargs outrank environment in pydantic-settings.
+        webhook_base_url="",
     )
     base.update(overrides)
     return Settings(_env_file=None, **base)
