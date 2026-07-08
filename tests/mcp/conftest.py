@@ -172,3 +172,31 @@ def _call(mcp: FastMCP, name: str, **kwargs: Any) -> Any:
 def call_tool():
     """Expose the tool-dispatch helper as a fixture."""
     return _call
+
+
+@pytest_asyncio.fixture
+async def seeded_user(session_factory):
+    """Insert a real ``User`` via the Postgres-backed ``session_factory``.
+
+    The StaticTokenVerifier tests need durably-committed rows (the verifier
+    opens its own session to look the token up), so this fixture commits a
+    user and cleans it up afterwards. Deleting the user cascades to any
+    ``mcp_tokens`` rows created during the test (FK ``ondelete=CASCADE``).
+    """
+    from sqlalchemy import text
+
+    from app.models.user import User
+
+    async with session_factory() as session:
+        user = User(telegram_user_id=999_001)
+        session.add(user)
+        await session.commit()
+        await session.refresh(user)
+        user_id = user.id
+
+    try:
+        yield user
+    finally:
+        async with session_factory() as session:
+            await session.execute(text("DELETE FROM users WHERE id = :id"), {"id": str(user_id)})
+            await session.commit()
