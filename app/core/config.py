@@ -80,6 +80,36 @@ class Settings(BaseSettings):
     # unset and fall back to in-process state.
     redis_url: str | None = None
 
+    # ── MCP server ────────────────────────────────────────────────────────
+    # The MCP surface is mounted at /mcp when enabled. On a fresh install
+    # it is inert until an access token is created via /mcp_token — every
+    # request 401s with no token rows in the DB.
+    mcp_enabled: bool = True
+    # Externally-reachable base URL for the MCP server. Used for the
+    # OAuth-style issuer/resource metadata and Origin/Host allow-lists.
+    # Empty ⇒ fall back to webhook_base_url, then http://localhost:8000.
+    mcp_public_url: str = ""
+    # Extra allowed browser Origins for the MCP endpoint (DNS-rebinding
+    # protection). The effective public URL is always included.
+    mcp_allowed_origins: list[str] = []
+    # Optional GitHub token to raise the raw.githubusercontent.com rate
+    # limit for the docs-federation fetcher (60/hr anon → 5000/hr).
+    mcp_github_token: str | None = None
+
+    @property
+    def mcp_effective_public_url(self) -> str:
+        """Resolved public base URL for MCP metadata and allow-lists."""
+        return (
+            self.mcp_public_url.rstrip("/")
+            or self.webhook_base_url.rstrip("/")
+            or "http://localhost:8000"
+        )
+
+    @property
+    def mcp_canonical_resource_uri(self) -> str:
+        """RFC 8707 canonical resource URI advertised to MCP clients."""
+        return f"{self.mcp_effective_public_url}/mcp"
+
     @field_validator("telegram_bot_token")
     @classmethod
     def token_must_not_be_empty(cls, v: str) -> str:
