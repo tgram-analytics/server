@@ -1,0 +1,9 @@
+// Add to pubspec.yaml:
+//   dependencies:
+//     {{ package_name.replace('-', '_') }}: ^0.1.0
+import 'package:{{ package_name.replace('-', '_') }}/{{ package_name.replace('-', '_') }}.dart';
+
+final tga = TGA(apiKey: '{{ api_key }}', serverUrl: '{{ server_url }}');
+
+// Track an event
+tga.track(eventName: 'signup', properties: {'plan': 'free'});
