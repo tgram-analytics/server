@@ -37,6 +37,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     from app.bot.handlers.doctor import doctor_command
     from app.bot.handlers.events import events_callback, events_command
     from app.bot.handlers.funnels import funnel_callback
+    from app.bot.handlers.mcp_tokens import mcp_token_callback, mcp_token_command
     from app.bot.handlers.onboarding import onboarding_callback
     from app.bot.handlers.overview import overview_command
     from app.bot.handlers.projects import add_command, project_callback, projects_command
@@ -82,6 +83,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     app.add_handler(CommandHandler("overview", overview_command, filters=admin_filter))
     app.add_handler(CommandHandler("alerts", alerts_command, filters=admin_filter))
     app.add_handler(CommandHandler("doctor", doctor_command, filters=admin_filter))
+    app.add_handler(CommandHandler("mcp_token", mcp_token_command, filters=admin_filter))
 
     # Callback queries don't support CommandHandler filters directly — we
     # guard inside the handler using the same admin_chat_id check.
@@ -90,6 +92,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     app.add_handler(CallbackQueryHandler(events_callback, pattern=r"^(evt[a:]|back:events)"))
     app.add_handler(CallbackQueryHandler(funnel_callback, pattern=r"^(fnl_|back:funnels:)"))
     app.add_handler(CallbackQueryHandler(onboarding_callback, pattern=r"^onb:"))
+    app.add_handler(CallbackQueryHandler(mcp_token_callback, pattern=r"^mcptok:"))
     app.add_handler(CallbackQueryHandler(project_callback))
 
     # Text messages for multi-step conversation flows (e.g., add-alert)
