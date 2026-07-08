@@ -192,6 +192,28 @@ An empty allowlist allows all origins.
 
 ---
 
+## Connect Claude (MCP)
+
+The server exposes an MCP endpoint at `/mcp` so Claude Code, Claude
+Desktop, Cursor, and other MCP clients can query your analytics and
+help you integrate the SDKs.
+
+1. In Telegram, send `/mcp_token new claude` to your bot. Copy the
+   `mcp_...` token — it is shown only once.
+2. Add the server to Claude Code:
+
+   ```bash
+   claude mcp add --transport http tgram https://your-server.example.com/mcp \
+     --header "Authorization: Bearer mcp_..."
+   ```
+
+Revoke tokens anytime with `/mcp_token`. Set `MCP_ENABLED=false` to
+remove the endpoint entirely. `MCP_PUBLIC_URL` overrides the base URL
+used in metadata and CORS/Host allow-lists (defaults to
+`WEBHOOK_BASE_URL`).
+
+---
+
 ## Development
 
 ### Setup
