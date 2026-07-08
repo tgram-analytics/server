@@ -47,6 +47,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 app.mount(prefix, router_or_app)
             if child_lifespan is not None:
                 await stack.enter_async_context(child_lifespan(app))
+        # Mount the MCP surface unless disabled. A plugin may have mounted
+        # its own ASGI app at /mcp (pre-hook-era cloud overlays did); in
+        # that case skip ours so the two don't stack.
+        plugin_owns_mcp = any(
+            prefix == "/mcp" and not isinstance(router_or_app, APIRouter)
+            for prefix, router_or_app, _ in get_registered_http_routers()
+        )
+        if settings.mcp_enabled and not plugin_owns_mcp:
+            from app.extensions import get_mcp_token_verifier
+            from app.mcp.auth import StaticTokenVerifier
+            from app.mcp.router import build_health_router
+            from app.mcp.server import build_mcp_asgi_app
+
+            verifier = get_mcp_token_verifier() or StaticTokenVerifier()
+            app.include_router(build_health_router(), prefix="/mcp")
+            mcp_asgi_app, mcp_lifespan = build_mcp_asgi_app(settings, token_verifier=verifier)
+            app.mount("/mcp", mcp_asgi_app)
+            await stack.enter_async_context(mcp_lifespan(app))
         await init_bot(
             token=settings.telegram_bot_token,
             admin_chat_id=settings.admin_chat_id,
