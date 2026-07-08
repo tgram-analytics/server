@@ -1,0 +1,10 @@
+// Install: npm install {{ package_name }}
+import { TGA } from '{{ package_name }}';
+
+TGA.init({
+  apiKey: '{{ api_key }}',
+  serverUrl: '{{ server_url }}',
+});
+
+// Track an event
+TGA.track('signup', { plan: 'free' });
