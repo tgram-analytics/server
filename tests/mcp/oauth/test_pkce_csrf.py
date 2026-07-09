@@ -14,6 +14,10 @@ def test_pkce_roundtrip():
     assert not verify_s256("wrong-verifier", challenge)
 
 
+def test_pkce_non_ascii_verifier_fails_closed():
+    assert not verify_s256("café-verifier", s256_challenge("x"))
+
+
 def test_csrf_roundtrip_bound_to_client():
     tok = issue_csrf(secret=SECRET, client_id="abc")
     assert verify_csrf(tok, secret=SECRET, client_id="abc")

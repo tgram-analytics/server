@@ -17,5 +17,17 @@ def s256_challenge(code_verifier: str) -> str:
 
 
 def verify_s256(code_verifier: str, code_challenge: str) -> bool:
-    """Constant-time-compare a presented verifier against a stored challenge."""
-    return hmac.compare_digest(s256_challenge(code_verifier), code_challenge)
+    """Constant-time-compare a presented verifier against a stored challenge.
+
+    A non-ASCII verifier fails closed (``False``) instead of raising:
+    RFC 7636 §4.1's verifier grammar is ASCII-only, so such input is
+    definitionally invalid — and callers rely on the all-failures-are-
+    ``False`` contract (``service.exchange_code`` collapses every failure
+    to ``None``/``invalid_grant``). Deliberate divergence from the cloud
+    copy of this module, which lets ``UnicodeEncodeError`` escape here —
+    flag for upstream sync.
+    """
+    try:
+        return hmac.compare_digest(s256_challenge(code_verifier), code_challenge)
+    except UnicodeEncodeError:
+        return False
