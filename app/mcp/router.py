@@ -28,7 +28,7 @@ def build_health_router() -> APIRouter:
     router = APIRouter()
 
     @router.get("/_health")
-    async def health() -> dict:
+    async def health() -> dict[str, str]:
         return {"status": "ok", "module": "mcp"}
 
     return router
