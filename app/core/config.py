@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     # Optional GitHub token to raise the raw.githubusercontent.com rate
     # limit for the docs-federation fetcher (60/hr anon → 5000/hr).
     mcp_github_token: str | None = None
+    # Browser OAuth for MCP clients that cannot send custom headers
+    # (Claude Desktop). Self-host only: mounted when the default
+    # StaticTokenVerifier is in use; a plugin-registered verifier
+    # (cloud overlay) supplies its own OAuth and this flag is inert.
+    mcp_oauth_enabled: bool = True
 
     @property
     def mcp_effective_public_url(self) -> str:
