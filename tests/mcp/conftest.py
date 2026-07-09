@@ -32,7 +32,7 @@ import asyncio
 import os
 import socket
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import ExitStack, asynccontextmanager, contextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -227,7 +227,12 @@ def _find_free_port() -> int:
 
 @asynccontextmanager
 async def _boot_server(
-    *, mcp_enabled: bool, real_db: bool = False, database_url: str | None = None
+    *,
+    mcp_enabled: bool,
+    real_db: bool = False,
+    database_url: str | None = None,
+    extra_env: dict[str, str] | None = None,
+    pre_boot: Callable[[], None] | None = None,
 ) -> AsyncIterator[str]:
     """Boot the real ``app.main`` app under uvicorn with heavy deps stubbed.
 
@@ -260,9 +265,13 @@ async def _boot_server(
         "WEBHOOK_BASE_URL": "https://example.com",
         "MCP_ENABLED": "true" if mcp_enabled else "false",
     }
+    if extra_env:
+        env.update(extra_env)
     prev = {k: os.environ.get(k) for k in env}
     os.environ.update(env)
     ext._reset_for_tests()
+    if pre_boot is not None:
+        pre_boot()
 
     import app.main as main_mod
 
