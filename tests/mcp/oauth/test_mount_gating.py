@@ -39,3 +39,20 @@ async def test_oauth_flag_off_unmounts():
         httpx.AsyncClient(base_url=base_url, timeout=10.0) as client,
     ):
         assert (await client.get("/.well-known/oauth-authorization-server")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_forwarded_proto_yields_https_redirect(app_client):
+    """Behind a TLS-terminating proxy the /mcp 307 must point at https, not http."""
+    r = await app_client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        headers={
+            "Accept": "application/json, text/event-stream",
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-For": "203.0.113.9",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 307
+    assert r.headers["location"].startswith("https://")
