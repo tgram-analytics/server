@@ -207,6 +207,9 @@ help you integrate the SDKs.
      --header "Authorization: Bearer mcp_..."
    ```
 
+Claude Desktop is supported via Settings → Connectors → Add custom
+connector (paste an `/mcp_token` token in the browser page that opens).
+
 Revoke tokens anytime with `/mcp_token`. Set `MCP_ENABLED=false` to
 remove the endpoint entirely. `MCP_PUBLIC_URL` overrides the base URL
 used in metadata and CORS/Host allow-lists (defaults to

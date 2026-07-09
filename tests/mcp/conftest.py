@@ -290,7 +290,13 @@ async def _boot_server(
     test_app = main_mod.create_app()
     port = _find_free_port()
     config = uvicorn.Config(
-        test_app, host="127.0.0.1", port=port, log_level="warning", loop="asyncio"
+        test_app,
+        host="127.0.0.1",
+        port=port,
+        log_level="warning",
+        loop="asyncio",
+        proxy_headers=True,
+        forwarded_allow_ips="*",
     )
     server = uvicorn.Server(config)
     task = asyncio.create_task(server.serve())
