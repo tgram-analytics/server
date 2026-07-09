@@ -62,10 +62,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
             verifier = get_mcp_token_verifier() or StaticTokenVerifier()
             app.include_router(build_health_router(), prefix="/mcp")
-            mcp_asgi_app, mcp_lifespan = build_mcp_asgi_app(settings, token_verifier=verifier)
-            app.mount("/mcp", mcp_asgi_app)
-            await stack.enter_async_context(mcp_lifespan(app))
             # Self-host OAuth for header-less MCP clients (Claude Desktop).
+            # Registered BEFORE the /mcp ASGI mount: Starlette matches routes
+            # in insertion order, so the /mcp/oauth/* routes must precede the
+            # catch-all mount or requests fall through to the FastMCP app and
+            # 404 — the same reason the /mcp health router is included first.
             # Only when the DEFAULT verifier is in use: a plugin-registered
             # verifier (cloud overlay) brings its own OAuth and well-known.
             if settings.mcp_oauth_enabled and get_mcp_token_verifier() is None:
@@ -76,6 +77,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 app.include_router(
                     build_well_known_router(public_url=settings.mcp_effective_public_url)
                 )
+            mcp_asgi_app, mcp_lifespan = build_mcp_asgi_app(settings, token_verifier=verifier)
+            app.mount("/mcp", mcp_asgi_app)
+            await stack.enter_async_context(mcp_lifespan(app))
         await init_bot(
             token=settings.telegram_bot_token,
             admin_chat_id=settings.admin_chat_id,
