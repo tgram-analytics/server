@@ -208,6 +208,8 @@ def build_oauth_router() -> APIRouter:
             admin_chat_id=get_settings().admin_chat_id,
             client_name=(client.client_name if client else client_id) or client_id,
             token_id=str(issued.id) if issued else "",
+            # True code recipient (attacker-proof), unlike attacker-chosen client_name.
+            redirect_host=urlparse(redirect_uri).hostname or redirect_uri,
         )
         # RFC 6749 §5.1: token responses must not be cached.
         return JSONResponse(

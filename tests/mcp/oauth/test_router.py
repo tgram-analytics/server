@@ -168,6 +168,8 @@ async def test_full_flow_issues_working_derived_token(oauth_client, seeded, sess
     assert body["token_type"] == "Bearer" and body["access_token"].startswith("mcp_")
     assert body["scope"] == "mcp:tools"
     notify.assert_awaited_once()
+    # Host derived from the /token form redirect_uri (REDIRECT), not client_name.
+    assert notify.await_args.kwargs["redirect_host"] == "claude.ai"
 
     async with session_factory() as session:
         row = await token_svc.lookup_active_token(session, body["access_token"])

@@ -16,7 +16,9 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 logger = logging.getLogger("app.mcp.oauth")
 
 
-async def notify_token_issued(*, admin_chat_id: int, client_name: str, token_id: str) -> None:
+async def notify_token_issued(
+    *, admin_chat_id: int, client_name: str, token_id: str, redirect_host: str
+) -> None:
     try:
         from app.bot.setup import get_bot
 
@@ -26,6 +28,7 @@ async def notify_token_issued(*, admin_chat_id: int, client_name: str, token_id:
             text=(
                 "🔑 New MCP client authorized via OAuth: "
                 f"<b>{escape(client_name)}</b>\n"
+                f"Callback host: <b>{escape(redirect_host)}</b>\n"
                 "Not you? Revoke it now."
             ),
             parse_mode="HTML",

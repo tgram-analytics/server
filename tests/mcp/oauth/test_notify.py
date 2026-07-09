@@ -12,10 +12,18 @@ async def test_sends_message_with_revoke_button():
     bot = MagicMock()
     bot.send_message = AsyncMock()
     with patch("app.bot.setup.get_bot", return_value=bot):
-        await notify_token_issued(admin_chat_id=42, client_name="Claude", token_id="abc-123")
+        await notify_token_issued(
+            admin_chat_id=42,
+            client_name="Claude",
+            token_id="abc-123",
+            redirect_host="claude.ai",
+        )
     kwargs = bot.send_message.call_args.kwargs
     assert kwargs["chat_id"] == 42
     assert "Claude" in kwargs["text"]
+    # The redirect host is the true code recipient (attacker cannot fake it).
+    assert "Callback host:" in kwargs["text"]
+    assert "claude.ai" in kwargs["text"]
     markup = kwargs["reply_markup"]
     assert markup.inline_keyboard[0][0].callback_data == "mcptok:revoke:abc-123"
 
@@ -23,5 +31,7 @@ async def test_sends_message_with_revoke_button():
 @pytest.mark.asyncio
 async def test_failure_is_swallowed():
     with patch("app.bot.setup.get_bot", side_effect=RuntimeError("bot down")):
-        await notify_token_issued(admin_chat_id=42, client_name="C", token_id="x")
+        await notify_token_issued(
+            admin_chat_id=42, client_name="C", token_id="x", redirect_host="h"
+        )
     # no raise = pass
