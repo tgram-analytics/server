@@ -81,12 +81,12 @@ def test_flutter_snippet_uses_camelcase_kwargs():
     assert "serverUrl:" in rendered
 
 
-def test_autoescape_does_not_break_on_html_active_input():
-    """Passing ``<script>`` shouldn't raise; autoescape may html-encode it.
+def test_active_input_is_rendered_verbatim():
+    """Angle-bracket input must not raise or be dropped.
 
-    The point: rendering must not raise, and the output must contain
-    the input data in some form (escaped or otherwise) rather than
-    silently dropping it.
+    Autoescape is off (snippets are code, not HTML), so the value is
+    spliced in verbatim. The point: rendering must not raise, and the
+    input must survive in the output rather than being silently dropped.
     """
     template = _env.get_template("js.jinja2")
     rendered = template.render(
@@ -94,8 +94,19 @@ def test_autoescape_does_not_break_on_html_active_input():
         server_url="https://api.example",
         package_name="tgram-analytics",
     )
-    # Autoescape on → angle brackets get encoded. We don't care about
-    # the exact escaping form; we just assert the value didn't get
-    # silently dropped AND the snippet still has its init.
     assert "TGA.init" in rendered
-    assert "alert" in rendered  # input survived in some form
+    assert "alert" in rendered  # input survived
+
+
+def test_placeholder_key_is_not_html_escaped():
+    """The default ``<YOUR_API_KEY>`` placeholder renders with literal angle
+    brackets so the snippet is copy-paste-ready (regression: autoescape
+    used to emit ``&lt;YOUR_API_KEY&gt;``)."""
+    template = _env.get_template("js.jinja2")
+    rendered = template.render(
+        api_key="<YOUR_API_KEY>",
+        server_url="https://api.example",
+        package_name="tgram-analytics",
+    )
+    assert "<YOUR_API_KEY>" in rendered
+    assert "&lt;" not in rendered

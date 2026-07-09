@@ -16,11 +16,13 @@ project name) without re-auditing this surface. Returning a key
 shaped like ``<YOUR_API_KEY>`` matches the bot's onboarding flow
 (``server/app/bot/handlers/onboarding.py``) so docs are consistent.
 
-Autoescape is **on** in the Jinja environment. The snippets are not
-HTML, but autoescape protects against accidental injection if a
-template is ever served verbatim in a markdown / HTML context, and
-the small visual cost (``&lt;``) is acceptable inside angle-bracket
-placeholders.
+Autoescape is **off**. These templates are source code (JS / Python /
+Dart), never HTML — the rendered string is returned verbatim in a JSON
+MCP tool result for the caller to copy-paste. With autoescape on, the
+``<YOUR_API_KEY>`` placeholder rendered as ``&lt;YOUR_API_KEY&gt;``,
+which broke the snippet the tool exists to produce. The only templated
+value a caller can influence is ``api_key`` — their own key, and only
+in their own output — so escaping buys no security here.
 """
 
 from __future__ import annotations
@@ -29,7 +31,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.mcp.auth import assert_project_owned_by
@@ -57,7 +59,7 @@ _SNIPPETS_DIR = Path(__file__).parent / "snippets"
 # the file mtime changes, and we never write to them at runtime.
 _env = Environment(
     loader=FileSystemLoader(str(_SNIPPETS_DIR)),
-    autoescape=select_autoescape(default=True),
+    autoescape=False,  # templates are code, not HTML — see module docstring
     keep_trailing_newline=True,
 )
 
