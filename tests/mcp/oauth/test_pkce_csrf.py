@@ -26,6 +26,11 @@ def test_csrf_tamper_rejected():
     assert not verify_csrf("garbage", secret=SECRET, client_id="abc")
 
 
+def test_csrf_non_ascii_sig_returns_false():
+    tok = "nonce.9999999999.sïg"
+    assert not verify_csrf(tok, secret=SECRET, client_id="abc")
+
+
 def test_csrf_expiry(monkeypatch):
     tok = issue_csrf(secret=SECRET, client_id="abc", ttl_seconds=1)
     real = time.time
