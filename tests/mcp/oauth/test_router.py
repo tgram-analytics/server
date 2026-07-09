@@ -70,12 +70,12 @@ async def _register(client) -> str:
     return r.json()["client_id"]
 
 
-def _authorize_params(client_id: str, challenge: str) -> dict[str, str]:
+def _authorize_params(client_id: str, challenge: str, state: str = "xyz") -> dict[str, str]:
     return {
         "response_type": "code",
         "client_id": client_id,
         "redirect_uri": REDIRECT,
-        "state": "xyz",
+        "state": state,
         "code_challenge": challenge,
         "code_challenge_method": "S256",
     }
@@ -107,7 +107,9 @@ async def test_authorize_rejects_unknown_client_and_bad_pkce(oauth_client):
     assert (await oauth_client.get("/mcp/oauth/authorize", params=params)).status_code == 400
 
 
-async def _post_authorize(client, cid: str, token: str, challenge: str, csrf: str):
+async def _post_authorize(
+    client, cid: str, token: str, challenge: str, csrf: str, state: str = "xyz"
+):
     return await client.post(
         "/mcp/oauth/authorize",
         data={
@@ -115,7 +117,7 @@ async def _post_authorize(client, cid: str, token: str, challenge: str, csrf: st
             "csrf_token": csrf,
             "client_id": cid,
             "redirect_uri": REDIRECT,
-            "state": "xyz",
+            "state": state,
             "code_challenge": challenge,
         },
     )
@@ -134,16 +136,20 @@ async def test_full_flow_issues_working_derived_token(oauth_client, seeded, sess
     user_id, master = seeded
     cid = await _register(oauth_client)
     challenge = s256_challenge("verifier-1")
-    page = await oauth_client.get("/mcp/oauth/authorize", params=_authorize_params(cid, challenge))
+    # Special chars prove urlencode escaping survives the redirect round-trip.
+    state = "a b&x=1"
+    page = await oauth_client.get(
+        "/mcp/oauth/authorize", params=_authorize_params(cid, challenge, state=state)
+    )
     csrf = _extract_csrf(page.text)
 
     with patch("app.mcp.oauth.router.notify_token_issued", new=AsyncMock()) as notify:
-        r = await _post_authorize(oauth_client, cid, master, challenge, csrf)
+        r = await _post_authorize(oauth_client, cid, master, challenge, csrf, state=state)
         assert r.status_code == 302
         loc = urlparse(r.headers["location"])
         assert loc.netloc == "claude.ai"
         q = parse_qs(loc.query)
-        assert q["state"] == ["xyz"]
+        assert q["state"] == [state]
         code = q["code"][0]
 
         r2 = await oauth_client.post(
@@ -157,13 +163,60 @@ async def test_full_flow_issues_working_derived_token(oauth_client, seeded, sess
             },
         )
     assert r2.status_code == 200
+    assert r2.headers["cache-control"] == "no-store"  # RFC 6749 §5.1
     body = r2.json()
     assert body["token_type"] == "Bearer" and body["access_token"].startswith("mcp_")
+    assert body["scope"] == "mcp:tools"
     notify.assert_awaited_once()
 
     async with session_factory() as session:
         row = await token_svc.lookup_active_token(session, body["access_token"])
         assert row is not None and row.user_id == user_id and row.label.startswith("oauth:")
+
+
+@pytest.mark.asyncio
+async def test_authorize_redirect_merges_existing_query(oauth_client, seeded):
+    """A registered redirect_uri that already carries a query must not gain a
+    second '?': params merge into the existing query (RFC 6749 §3.1.2)."""
+    _, master = seeded
+    redirect = "https://claude.ai/cb?v=1"
+    reg = await oauth_client.post(
+        "/mcp/oauth/register",
+        json={"client_name": "Claude", "redirect_uris": [redirect]},
+    )
+    assert reg.status_code == 201
+    cid = reg.json()["client_id"]
+    challenge = s256_challenge("v")
+    page = await oauth_client.get(
+        "/mcp/oauth/authorize",
+        params={
+            "response_type": "code",
+            "client_id": cid,
+            "redirect_uri": redirect,
+            "state": "xyz",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        },
+    )
+    assert page.status_code == 200
+    csrf = _extract_csrf(page.text)
+    resp = await oauth_client.post(
+        "/mcp/oauth/authorize",
+        data={
+            "token": master,
+            "csrf_token": csrf,
+            "client_id": cid,
+            "redirect_uri": redirect,
+            "state": "xyz",
+            "code_challenge": challenge,
+        },
+    )
+    assert resp.status_code == 302
+    location = resp.headers["location"]
+    assert location.count("?") == 1  # not https://host/cb?v=1?code=...
+    q = parse_qs(urlparse(location).query)
+    assert q["v"] == ["1"]  # pre-existing query preserved
+    assert "code" in q
 
 
 @pytest.mark.asyncio
