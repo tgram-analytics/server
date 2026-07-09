@@ -22,6 +22,18 @@ _STYLE = (
 )
 
 
+def _attr_uri(value: str) -> str:
+    """Escape a URI for an HTML attribute, hiding the userinfo trick.
+
+    ``@`` becomes ``&#64;`` so a spoofable ``trusted-host@`` prefix never
+    appears literally anywhere in the page source (not even view-source).
+    Browsers decode character references in attribute values at parse
+    time, so the form still submits the byte-exact original URI and the
+    server's exact-match redirect_uri validation is unaffected.
+    """
+    return escape(value).replace("@", "&#64;")
+
+
 def render_authorize_page(
     *,
     client_name: str,
@@ -32,7 +44,10 @@ def render_authorize_page(
     csrf_token: str,
     error: str | None = None,
 ) -> str:
-    host = urlparse(redirect_uri).netloc or redirect_uri
+    # .hostname, not .netloc: netloc retains userinfo, so a client
+    # registered with https://claude.ai@evil.example/cb would display the
+    # spoofable "claude.ai@..." prefix and defeat the confused-deputy cue.
+    host = urlparse(redirect_uri).hostname or redirect_uri
     err_html = (
         '<p class="err">That didn&#39;t work — check the token and try again.</p>' if error else ""
     )
@@ -52,7 +67,7 @@ in your own MCP client, close this tab.</p>
          placeholder="mcp_..." required>
   <input type="hidden" name="csrf_token" value="{escape(csrf_token)}">
   <input type="hidden" name="client_id" value="{escape(client_id)}">
-  <input type="hidden" name="redirect_uri" value="{escape(redirect_uri)}">
+  <input type="hidden" name="redirect_uri" value="{_attr_uri(redirect_uri)}">
   <input type="hidden" name="state" value="{escape(state)}">
   <input type="hidden" name="code_challenge" value="{escape(code_challenge)}">
   <button type="submit">Authorize</button>

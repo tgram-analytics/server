@@ -30,6 +30,12 @@ def test_token_field_hardened():
     assert 'name="csrf_token"' in html and "csrf123" in html
 
 
+def test_redirect_host_ignores_userinfo_spoof():
+    html = _page(redirect_uri="https://claude.ai@evil.example/cb")
+    assert "evil.example" in html
+    assert "claude.ai@" not in html
+
+
 def test_html_escapes_client_name():
     html = _page(client_name="<script>alert(1)</script>")
     assert "<script>alert(1)</script>" not in html
