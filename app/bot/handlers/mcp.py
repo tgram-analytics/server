@@ -75,7 +75,10 @@ async def mcp_command(
         "Claude Code:\n"
         f"<code>claude mcp add --transport http tgram {esc} "
         '--header "Authorization: Bearer YOUR_TOKEN"</code>\n\n'
-        "Claude Desktop / Cursor: add an HTTP MCP server with URL "
+        "Claude Desktop: Settings → Connectors → <b>Add custom connector</b>, "
+        f"URL <code>{esc}</code> — a browser page opens; paste a token from "
+        "/mcp_token there.\n"
+        "Cursor: add an HTTP MCP server with URL "
         f"<code>{esc}</code> and header "
         "<code>Authorization: Bearer YOUR_TOKEN</code>.\n\n"
         '<b>3. Try it</b> — ask: <i>"list my tgram-analytics projects"</i>.\n\n'

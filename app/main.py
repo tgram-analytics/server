@@ -65,6 +65,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             mcp_asgi_app, mcp_lifespan = build_mcp_asgi_app(settings, token_verifier=verifier)
             app.mount("/mcp", mcp_asgi_app)
             await stack.enter_async_context(mcp_lifespan(app))
+            # Self-host OAuth for header-less MCP clients (Claude Desktop).
+            # Only when the DEFAULT verifier is in use: a plugin-registered
+            # verifier (cloud overlay) brings its own OAuth and well-known.
+            if settings.mcp_oauth_enabled and get_mcp_token_verifier() is None:
+                from app.mcp.oauth.router import build_oauth_router
+                from app.mcp.well_known import build_well_known_router
+
+                app.include_router(build_oauth_router(), prefix="/mcp/oauth")
+                app.include_router(
+                    build_well_known_router(public_url=settings.mcp_effective_public_url)
+                )
         await init_bot(
             token=settings.telegram_bot_token,
             admin_chat_id=settings.admin_chat_id,
