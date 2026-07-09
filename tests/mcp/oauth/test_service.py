@@ -78,6 +78,29 @@ async def test_exchange_rejects_pkce_mismatch(db_session):
 
 
 @pytest.mark.asyncio
+async def test_exchange_rejects_non_ascii_verifier(db_session):
+    user = await _user(db_session)
+    client = await svc.register_client(db_session, client_name="C", redirect_uris=[REDIRECT])
+    code = await svc.mint_code(
+        db_session,
+        user_id=user.id,
+        client_id=client.client_id,
+        redirect_uri=REDIRECT,
+        code_challenge=s256_challenge("v"),
+    )
+    assert (
+        await svc.exchange_code(
+            db_session,
+            code=code,
+            client_id=client.client_id,
+            redirect_uri=REDIRECT,
+            code_verifier="café",
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
 async def test_exchange_code_single_use(db_session):
     user = await _user(db_session)
     client = await svc.register_client(db_session, client_name="C", redirect_uris=[REDIRECT])
