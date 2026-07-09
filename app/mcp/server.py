@@ -113,7 +113,8 @@ def _build_origin_middleware(
 
 def _header_value(scope: _ASGIScope, name: bytes) -> str | None:
     """Return decoded header value or ``None``. Case-insensitive on the name."""
-    for header_name, value in scope.get("headers", []):
+    headers: list[tuple[bytes, bytes]] = scope.get("headers", [])
+    for header_name, value in headers:
         if header_name.lower() == name:
             try:
                 return value.decode("latin-1")

@@ -35,6 +35,7 @@ async def mcp_token_command(
     user: User,
     session: AsyncSession,
 ) -> None:
+    assert update.message is not None
     args = ctx.args or []
     if args and args[0] == "new":
         label = " ".join(args[1:]) or "default"
@@ -81,10 +82,13 @@ async def mcp_token_callback(
     session: AsyncSession,
 ) -> None:
     query = update.callback_query
+    assert query is not None
     await query.answer()
-    _, action, token_id = query.data.split(":", 2)
-    if action != "revoke":
+    data = query.data or ""
+    parts = data.split(":", 2)
+    if len(parts) != 3 or parts[1] != "revoke":
         return
+    token_id = parts[2]
 
     revoked = await svc.revoke_token(session, token_id=uuid.UUID(token_id), user_id=user.id)
     await query.edit_message_text(

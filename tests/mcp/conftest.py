@@ -226,7 +226,9 @@ def _find_free_port() -> int:
 
 
 @asynccontextmanager
-async def _boot_server(*, mcp_enabled: bool, real_db: bool = False) -> AsyncIterator[str]:
+async def _boot_server(
+    *, mcp_enabled: bool, real_db: bool = False, database_url: str | None = None
+) -> AsyncIterator[str]:
     """Boot the real ``app.main`` app under uvicorn with heavy deps stubbed.
 
     The MCP mount lives inside ``app.main.lifespan`` (after the http-router
@@ -237,6 +239,10 @@ async def _boot_server(*, mcp_enabled: bool, real_db: bool = False) -> AsyncIter
     Pass ``real_db=True`` for the token smoke test: then ``init_db`` runs
     for real so the default ``StaticTokenVerifier`` and the tool handlers
     resolve a live ``get_session_factory()`` against the Postgres test DB.
+    In that case pass ``database_url`` too — it MUST be the same URL the
+    test harness engine uses (where the token was committed), not a
+    hard-coded local default; CI's Postgres credentials differ from
+    ``tga:password@localhost``, so a hard-coded URL 401s the verifier.
     Patches stay active for the server's whole lifetime because
     uvicorn.Server runs in-process on this event loop.
 
@@ -248,7 +254,8 @@ async def _boot_server(*, mcp_enabled: bool, real_db: bool = False) -> AsyncIter
     env = {
         "TELEGRAM_BOT_TOKEN": "1234567890:test-token-for-testing-only",
         "ADMIN_CHAT_ID": "123456789",
-        "DATABASE_URL": "postgresql+asyncpg://tga:password@localhost/tganalytics_test",
+        "DATABASE_URL": database_url
+        or "postgresql+asyncpg://tga:password@localhost/tganalytics_test",
         "SECRET_KEY": "test-secret-key-not-for-production",
         "WEBHOOK_BASE_URL": "https://example.com",
         "MCP_ENABLED": "true" if mcp_enabled else "false",
@@ -328,19 +335,24 @@ async def app_client_mcp_disabled() -> AsyncIterator[httpx.AsyncClient]:
 
 @pytest_asyncio.fixture
 async def app_client_with_token(
+    async_engine,
     session_factory,
 ) -> AsyncIterator[tuple[httpx.AsyncClient, str]]:
     """Boot the app (mcp enabled, real Postgres DB) + a pre-created token.
 
     Creates a ``User`` and a static ``mcp_`` token via the service, commits
-    them to the Postgres test DB (the same DB ``init_db`` wires the default
-    verifier to), and yields ``(client, raw_token)``. The user is deleted on
-    teardown, cascading to its ``mcp_tokens`` rows.
+    them to the Postgres test DB, and yields ``(client, raw_token)``. The
+    booted app's ``init_db`` is pointed at the SAME engine URL the token was
+    written through (``async_engine``), so it works whether the DB is the
+    local container or CI's Postgres service — never a hard-coded default.
+    The user is deleted on teardown, cascading to its ``mcp_tokens`` rows.
     """
     from sqlalchemy import text
 
     from app.models.user import User
     from app.services import mcp_tokens as svc
+
+    db_url = async_engine.url.render_as_string(hide_password=False)
 
     async with session_factory() as session:
         user = User(telegram_user_id=999_777)
@@ -352,7 +364,7 @@ async def app_client_with_token(
 
     try:
         async with (
-            _boot_server(mcp_enabled=True, real_db=True) as base_url,
+            _boot_server(mcp_enabled=True, real_db=True, database_url=db_url) as base_url,
             httpx.AsyncClient(base_url=base_url, timeout=15.0) as client,
         ):
             yield client, raw
