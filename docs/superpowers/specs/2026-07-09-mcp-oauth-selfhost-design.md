@@ -41,24 +41,26 @@ All absolute URLs in metadata use `settings.mcp_effective_public_url` (https), n
 Two new tables; reuse `mcp_tokens` for issued access tokens.
 
 ```
-mcp_oauth_clients
+mcp_selfhost_oauth_clients
   id             UUID PK
   client_id      TEXT UNIQUE
   client_name    TEXT
   redirect_uris  TEXT[]            -- exact-match allowlist
   created_at     TIMESTAMP
 
-mcp_oauth_authorization_codes
+mcp_selfhost_oauth_codes
   code           TEXT PK           -- opaque, single-use
   user_id        UUID FK -> users
-  client_id      TEXT FK -> mcp_oauth_clients.client_id
+  client_id      TEXT FK -> mcp_selfhost_oauth_clients.client_id
   redirect_uri   TEXT
   code_challenge TEXT              -- S256 challenge
   expires_at     TIMESTAMP         -- 60s after issue
   used_at        TIMESTAMP NULL    -- set on first exchange; second use rejected
 ```
 
-Migration: revision `0011_mcp_oauth` (down `0010`), OSS-owned. (The cloud's own oauth tables are separately namespaced — see the cloud alembic fix — so no collision.)
+Renamed from the draft's `mcp_oauth_clients`/`mcp_oauth_authorization_codes`: the cloud overlay already owns tables by those names and the OSS migration chain also runs on cloud deploys (`alembic upgrade heads`), so identical names would break cloud.
+
+Migration: revision `0011_mcp_selfhost_oauth` (down `0010`), OSS-owned.
 
 ## 6. Flow
 
