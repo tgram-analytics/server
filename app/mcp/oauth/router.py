@@ -19,8 +19,7 @@ failure is a uniform ``invalid_grant``.
 
 from __future__ import annotations
 
-import logging
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -32,8 +31,6 @@ from app.mcp.oauth.csrf import issue_csrf, verify_csrf
 from app.mcp.oauth.notify import notify_token_issued
 from app.mcp.oauth.pages import render_authorize_page
 from app.mcp.oauth.rate_limit import RateLimiter
-
-logger = logging.getLogger("app.mcp.oauth")
 
 _register_limiter = RateLimiter(limit=20, window_seconds=60)
 _authorize_limiter = RateLimiter(limit=10, window_seconds=60)
@@ -59,6 +56,20 @@ def _open_session() -> AsyncSession:
     from app.core.database import get_session_factory
 
     return get_session_factory()()
+
+
+def _redirect_with(redirect_uri: str, params: dict[str, str]) -> str:
+    """Append OAuth params to *redirect_uri*, merging into any existing query.
+
+    A registered redirect_uri may already carry a query (RFC 6749 §3.1.2
+    permits it), so a naive ``f"{uri}?{...}"`` would emit a second ``?`` and
+    break the callback. ``parse_qsl``/``urlencode`` preserve the original
+    pairs and append ours.
+    """
+    parts = urlparse(redirect_uri)
+    q = dict(parse_qsl(parts.query, keep_blank_values=True))
+    q.update(params)
+    return urlunparse(parts._replace(query=urlencode(q)))
 
 
 def build_oauth_router() -> APIRouter:
@@ -160,7 +171,7 @@ def build_oauth_router() -> APIRouter:
             await session.commit()
 
         return RedirectResponse(
-            url=f"{redirect_uri}?{urlencode({'code': code, 'state': state})}",
+            url=_redirect_with(redirect_uri, {"code": code, "state": state}),
             status_code=302,
         )
 
@@ -198,10 +209,14 @@ def build_oauth_router() -> APIRouter:
             client_name=(client.client_name if client else client_id) or client_id,
             token_id=str(issued.id) if issued else "",
         )
-        return {
-            "access_token": raw,
-            "token_type": "Bearer",
-            "scope": "mcp:tools",
-        }
+        # RFC 6749 §5.1: token responses must not be cached.
+        return JSONResponse(
+            content={
+                "access_token": raw,
+                "token_type": "Bearer",
+                "scope": "mcp:tools",
+            },
+            headers={"Cache-Control": "no-store"},
+        )
 
     return router
