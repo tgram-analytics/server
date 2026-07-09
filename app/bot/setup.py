@@ -38,6 +38,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     from app.bot.handlers.events import events_callback, events_command
     from app.bot.handlers.export import export_callback
     from app.bot.handlers.funnels import funnel_callback
+    from app.bot.handlers.mcp import mcp_command
     from app.bot.handlers.mcp_tokens import mcp_token_callback, mcp_token_command
     from app.bot.handlers.onboarding import onboarding_callback
     from app.bot.handlers.overview import overview_command
@@ -84,6 +85,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     app.add_handler(CommandHandler("overview", overview_command, filters=admin_filter))
     app.add_handler(CommandHandler("alerts", alerts_command, filters=admin_filter))
     app.add_handler(CommandHandler("doctor", doctor_command, filters=admin_filter))
+    app.add_handler(CommandHandler("mcp", mcp_command, filters=admin_filter))
     app.add_handler(CommandHandler("mcp_token", mcp_token_command, filters=admin_filter))
 
     # Callback queries don't support CommandHandler filters directly — we
@@ -149,6 +151,7 @@ async def init_bot(token: str, admin_chat_id: int, webhook_base_url: str = "") -
             BotCommand("alerts", "List active alerts"),
             BotCommand("add", "Create a new project"),
             BotCommand("doctor", "Health check across all projects"),
+            BotCommand("mcp", "Connect an AI agent (MCP)"),
             BotCommand("help", "Show help"),
             BotCommand("cancel", "Cancel current operation"),
         ]
