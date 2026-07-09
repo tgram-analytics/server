@@ -32,8 +32,9 @@ def verify_csrf(token: str, *, secret: str, client_id: str) -> bool:
     try:
         nonce, expiry_s, sig = token.split(".", 2)
         expiry = int(expiry_s)
-    except ValueError:
+        if time.time() > expiry:
+            return False
+        # TypeError: compare_digest rejects non-ASCII str (forged sig segment).
+        return hmac.compare_digest(sig, _sign(secret, nonce, expiry, client_id))
+    except (ValueError, TypeError):
         return False
-    if time.time() > expiry:
-        return False
-    return hmac.compare_digest(sig, _sign(secret, nonce, expiry, client_id))
