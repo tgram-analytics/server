@@ -16,6 +16,12 @@ async def test_selfhost_mounts_oauth(app_client):
     r = await app_client.get("/favicon.ico")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("image/svg+xml")
+    # Guards mount ORDER: the oauth router must be reachable through the
+    # fully-mounted app, i.e. included BEFORE the catch-all /mcp ASGI mount.
+    # authorize GET early-returns 400 before any DB work, so this needs no
+    # Postgres; if the /mcp mount shadowed /mcp/oauth/*, FastMCP would 404/406.
+    r = await app_client.get("/mcp/oauth/authorize")
+    assert r.status_code == 400
 
 
 @pytest.mark.asyncio
