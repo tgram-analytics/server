@@ -108,12 +108,48 @@ No signing key needed (no JWT). No BotFather setup.
 - **DCR:** rate-limited to prevent client-registration spam.
 - **No token in logs.** Authorize POST body (token) is scrubbed by the existing redacting log filter; add the field name to its patterns if needed.
 
+### 10.1 Threat: attacker-initiated authorize link (confused deputy)
+
+DCR is open, so an attacker can register their own client + redirect_uri and
+send the admin a link to the *genuine* authorize page. If the admin pastes
+their token, the auth code is delivered to the attacker's redirect_uri and —
+since the attacker generated the PKCE challenge — they can exchange it for a
+derived access token. PKCE does not defend against this (the attacker *is*
+the flow initiator). The design trains the user to paste a powerful
+credential into a browser page, so this must be made visible and detectable:
+
+- **Show who is asking.** The authorize page prominently renders the
+  client_name and the redirect host: "Authorizing **{client_name}** —
+  callback to **{redirect host}**". An unexpected client/host is the
+  admin's cue to close the tab.
+- **Telegram notification on every issuance.** When `/token` mints a derived
+  token, the bot messages the admin: "🔑 New MCP client authorized:
+  *{client_name}*. Not you? Revoke below." with an inline revoke button
+  (reuses the `mcptok:revoke:` callback). Silent theft becomes a detectable
+  event. Best-effort: notification failure must not fail the token grant.
+- **CSRF token** on the authorize form (issued at GET, checked at POST).
+- **Rate-limit the authorize POST** (per-IP) — pointless for guessing a
+  256-bit token but blunts drive-by hammering and DoS.
+- **Input hygiene:** token field is `type=password`, `autocomplete="off"`,
+  `spellcheck="false"`; value never echoed back into the page.
+
+Residual risk: the admin can still be socially engineered into approving an
+attacker's client, but the client identity is displayed, the grant is
+announced in Telegram, and the token is listed and revocable via
+`/mcp_token`. Acceptable for a single-admin read-mostly surface. A stronger
+"Confirm in Telegram" flow (bot sends approve/deny buttons; nothing pasted
+at all) is the designated v2 upgrade and removes the paste habit entirely.
+
 ## 11. Testing
 
 - Metadata endpoints return correct https URLs and S256-only.
 - DCR round-trip; rate limit trips.
 - `/authorize` GET renders; rejects bad client_id / redirect_uri / missing PKCE.
+- `/authorize` GET output contains the registered client_name and redirect host.
 - `/authorize` POST: valid token → code + redirect; invalid token → error, no code.
+- `/authorize` POST without a valid CSRF token → rejected, no code minted.
+- `/token` success sends the Telegram "new MCP client authorized" notification
+  (bot mocked); notification failure does not fail the grant.
 - `/token`: PKCE mismatch rejected; code single-use (second exchange 400); expired code rejected; redirect/client mismatch rejected.
 - End-to-end: run the full authorize→token dance, then call `/mcp` `tools/list` with the derived token (real MCP SDK client) → success.
 - OAuth endpoints NOT mounted when a custom verifier is registered (cloud) or `mcp_oauth_enabled=false`.
