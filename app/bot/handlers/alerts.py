@@ -151,7 +151,7 @@ async def alert_callback(
 
     if data.startswith("alert_add:"):
         project_id_str = data[10:]
-        await _start_add_alert(query, project_id_str)
+        await _start_add_alert(query, project_id_str, owner_user_id)
 
     elif data.startswith("alert_cond:"):
         condition = data[11:]
@@ -185,19 +185,37 @@ async def alert_callback(
         await show_alerts_menu(query, project_id_str, owner_user_id)
 
 
-async def _start_add_alert(query: CallbackQuery, project_id_str: str) -> None:
-    """Start the add-alert conversation flow."""
+async def _start_add_alert(
+    query: CallbackQuery, project_id_str: str, owner_user_id: uuid.UUID
+) -> None:
+    """Start the add-alert conversation flow.
+
+    Verifies the caller owns ``project_id_str`` BEFORE seeding conversation
+    state; otherwise a caller could begin creating an alert on another
+    tenant's project (IDOR). The verified owner is stashed in the payload so
+    the completion path can re-verify before the final ``create_alert``.
+    """
     assert isinstance(query.message, Message)
     chat_id = query.message.chat_id
 
+    try:
+        pid = uuid.UUID(project_id_str)
+    except ValueError:
+        await query.edit_message_text("❌ Invalid project reference.")
+        return
+
     factory = get_session_factory()
     async with factory() as session:
+        if await get_project(session, pid, owner_user_id) is None:
+            await query.edit_message_text("❌ Project not found.")
+            return
+
         svc = BotStateService(session)
         await svc.save(
             chat_id,
             flow="add_alert",
             step="event_name",
-            payload={"project_id": project_id_str},
+            payload={"project_id": project_id_str, "owner_user_id": str(owner_user_id)},
         )
         await session.commit()
 
@@ -236,6 +254,17 @@ async def _handle_condition_choice(
             return
 
         if condition == "every":
+            owner_raw = payload.get("owner_user_id")
+            if (
+                owner_raw
+                and await get_project(session, uuid.UUID(project_id_str), uuid.UUID(owner_raw))
+                is None
+            ):
+                await svc.clear(chat_id)
+                await session.commit()
+                await query.edit_message_text("❌ Project not found.")
+                return
+
             await create_alert(
                 session,
                 project_id=uuid.UUID(project_id_str),
@@ -423,6 +452,17 @@ async def handle_text_message(
         condition = (
             AlertCondition.every_n if condition_str == "every_n" else AlertCondition.threshold
         )
+
+        owner_raw = payload.get("owner_user_id")
+        if (
+            owner_raw
+            and await get_project(session, uuid.UUID(project_id_str), uuid.UUID(owner_raw)) is None
+        ):
+            await svc.clear(chat_id)
+            await update.message.reply_text(
+                "❌ Project not found. Please start again from the Alerts menu."
+            )
+            return
 
         await create_alert(
             session,
