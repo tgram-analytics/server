@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     # ── Rate limiting ─────────────────────────────────────────────────────
     rate_limit_per_second: int = 100
 
+    # ── Request-body size limit ───────────────────────────────────────────
+    # Hard cap (bytes) on request bodies. Enforced by an ASGI middleware via
+    # the Content-Length header before the body is read, so oversized payloads
+    # are rejected with 413 without ever being materialized in RAM.
+    max_request_body_bytes: int = 1_048_576  # 1 MB
+
     # ── Retention cap ─────────────────────────────────────────────────────
     # Hard ceiling on ``ProjectSettings.retention_days`` for user-driven
     # updates (the Telegram /settings flow). ``None`` means no cap —

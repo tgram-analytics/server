@@ -116,6 +116,42 @@ class TestTrackEventRequestArrays:
         assert set(map(type, m.properties["vals"])) == set(map(type, ["a", None, "b"]))
 
 
+# ── Property-value length cap (DoS guard) ──────────────────────────────────
+
+
+def test_property_value_over_max_length_rejected():
+    huge = "x" * 9000  # exceeds the 8 KB per-value cap
+    with pytest.raises(ValidationError):
+        TrackEventRequest(
+            api_key="proj_" + "a" * 64,
+            event_name="e",
+            session_id="s",
+            properties={"blob": huge},
+        )
+
+
+def test_property_list_element_over_max_length_rejected():
+    huge = "x" * 9000  # exceeds the 8 KB per-value cap
+    with pytest.raises(ValidationError):
+        TrackEventRequest(
+            api_key="proj_" + "a" * 64,
+            event_name="e",
+            session_id="s",
+            properties={"blobs": ["ok", huge]},
+        )
+
+
+def test_property_value_at_max_length_accepted():
+    at_cap = "x" * 8000  # under the 8192-char cap — accepted
+    m = TrackEventRequest(
+        api_key="proj_" + "a" * 64,
+        event_name="e",
+        session_id="s",
+        properties={"blob": at_cap},
+    )
+    assert m.properties["blob"] == at_cap
+
+
 # ── End-to-end ingestion + query tests ─────────────────────────────────────
 
 
