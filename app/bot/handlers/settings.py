@@ -146,8 +146,13 @@ def _build_allowlist_prompt(
     return text, keyboard
 
 
-async def _save_allowlist_state(chat_id: int, project_id_str: str) -> None:
+async def _save_allowlist_state(
+    chat_id: int, project_id_str: str, owner_user_id: uuid.UUID | None = None
+) -> None:
     """Persist the conversation state so the next text reply is treated as an allowlist."""
+    payload: dict[str, str] = {"project_id": project_id_str}
+    if owner_user_id is not None:
+        payload["owner_user_id"] = str(owner_user_id)
     factory = get_session_factory()
     async with factory() as session:
         svc = BotStateService(session)
@@ -155,7 +160,7 @@ async def _save_allowlist_state(chat_id: int, project_id_str: str) -> None:
             chat_id,
             flow="set_allowlist",
             step="value",
-            payload={"project_id": project_id_str},
+            payload=payload,
         )
         await session.commit()
 
@@ -181,7 +186,7 @@ async def start_set_allowlist(
             return
         project_name = project.name
 
-    await _save_allowlist_state(chat_id, project_id_str)
+    await _save_allowlist_state(chat_id, project_id_str, owner_user_id)
 
     text, keyboard = _build_allowlist_prompt(project_name, project_id_str)
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
@@ -211,6 +216,11 @@ async def handle_allow_all(
 
     factory = get_session_factory()
     async with factory() as session:
+        project = await get_project(session, pid, owner_user_id)
+        if project is None:
+            await query.edit_message_text("❌ Project not found.")
+            return
+
         # Clear conversation state if any
         svc = BotStateService(session)
         await svc.clear(chat_id)
@@ -317,6 +327,14 @@ async def handle_set_allowlist_text(
         await svc.clear(chat_id)
         await update.message.reply_text("❌ Invalid project reference. Please start over.")
         return
+
+    owner_raw = state.payload.get("owner_user_id")
+    if owner_raw:
+        owner_id = uuid.UUID(owner_raw)
+        if await get_project(session, pid, owner_id) is None:
+            await svc.clear(chat_id)
+            await update.message.reply_text("❌ Project not found.")
+            return
 
     domains = normalize_origin_entries(raw.split(","))
 

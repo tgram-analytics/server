@@ -332,6 +332,48 @@ async def test_allow_all_button_clears_allowlist(session_factory, singleton_user
         assert p.domain_allowlist == []
 
 
+async def test_handle_allow_all_rejects_foreign_project(session_factory, singleton_user):
+    """A non-owner cannot clear another tenant's domain allowlist."""
+    from sqlalchemy import select, text
+
+    from app.bot.handlers.settings import handle_allow_all
+    from app.models.project import Project
+    from app.models.user import User
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        victim = User(telegram_user_id=999_333)
+        session.add(victim)
+        await session.flush()
+        project, _ = await create_project(
+            session, name="victim2.com", admin_chat_id=999_333, owner_user_id=victim.id
+        )
+        project.domain_allowlist = ["https://victim2.com"]
+        await session.commit()
+        victim_pid = str(project.id)
+        victim_id = victim.id
+
+    query = MagicMock()
+    query.message = MagicMock(spec=Message)  # handler asserts isinstance(query.message, Message)
+    query.message.chat_id = ADMIN_ID
+    query.edit_message_text = AsyncMock()
+
+    await handle_allow_all(query, victim_pid, singleton_user.id)
+
+    async with session_factory() as session:
+        row = (
+            await session.execute(
+                select(Project.domain_allowlist).where(Project.id == uuid.UUID(victim_pid))
+            )
+        ).scalar_one()
+        assert row == ["https://victim2.com"]  # untouched
+        await session.execute(
+            text("DELETE FROM projects WHERE owner_user_id = :o"), {"o": str(victim_id)}
+        )
+        await session.execute(text("DELETE FROM users WHERE id = :i"), {"i": str(victim_id)})
+        await session.commit()
+
+
 async def test_start_set_retention_rejects_foreign_project(session_factory, singleton_user):
     """A caller who does not own the project cannot start the retention flow,
     and no conversation state is saved for them."""
