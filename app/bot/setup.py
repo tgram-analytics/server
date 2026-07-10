@@ -120,7 +120,12 @@ def get_bot() -> Bot:
     return bot
 
 
-async def init_bot(token: str, admin_chat_id: int, webhook_base_url: str = "") -> None:
+async def init_bot(
+    token: str,
+    admin_chat_id: int,
+    webhook_base_url: str = "",
+    webhook_secret: str = "",
+) -> None:
     """Initialise the bot application and optionally register the webhook."""
     global _application
 
@@ -158,14 +163,24 @@ async def init_bot(token: str, admin_chat_id: int, webhook_base_url: str = "") -
     )
 
     if webhook_base_url:
-        webhook_url = f"{webhook_base_url.rstrip('/')}/webhook/{token}"
+        # The secret is echoed back by Telegram in the
+        # X-Telegram-Bot-Api-Secret-Token header and is the ONLY thing the
+        # webhook endpoint trusts. Registering without it would leave the
+        # endpoint fail-closed (rejecting every update), so refuse loudly.
+        if not webhook_secret:
+            raise RuntimeError(
+                "WEBHOOK_SECRET must be set when WEBHOOK_BASE_URL is configured. "
+                "Generate a random 32+ char value (A-Za-z0-9_- only) so Telegram "
+                "can authenticate to /webhook via the secret-token header."
+            )
+        webhook_url = f"{webhook_base_url.rstrip('/')}/webhook"
         await _application.bot.set_webhook(
             url=webhook_url,
+            secret_token=webhook_secret,
             allowed_updates=["message", "callback_query"],
             drop_pending_updates=True,
         )
-        masked = token[:8] + "..." if len(token) > 8 else "***"
-        logger.info("Webhook registered at %s/webhook/%s", webhook_base_url.rstrip("/"), masked)
+        logger.info("Webhook registered at %s/webhook", webhook_base_url.rstrip("/"))
     else:
         logger.info(
             "WEBHOOK_BASE_URL not set — bot is in webhook-only mode "

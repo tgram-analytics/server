@@ -269,6 +269,8 @@ _REDACT_PATTERNS: list[re.Pattern[str]] = [
     for p in (
         r"proj_[a-f0-9]{64}",
         r"sk_(?:live|test)_[A-Za-z0-9]+",
+        r"mcp_[a-f0-9]{64}",
+        r"\d{6,}:[A-Za-z0-9_-]{30,}",
         r"(?i)(?:email|phone|ssn|password|token|credit_card)[\"\']?\s*[:=]\s*[\"\']?[^\"\'\s,}]+",
     )
 ]

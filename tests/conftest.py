@@ -102,6 +102,7 @@ async def client() -> AsyncClient:
     )
     os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production")
     os.environ.setdefault("WEBHOOK_BASE_URL", "https://example.com")
+    os.environ.setdefault("WEBHOOK_SECRET", "test-webhook-secret")
 
     from collections.abc import AsyncGenerator
     from contextlib import asynccontextmanager

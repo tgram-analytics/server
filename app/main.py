@@ -84,6 +84,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             token=settings.telegram_bot_token,
             admin_chat_id=settings.admin_chat_id,
             webhook_base_url=settings.webhook_base_url,
+            webhook_secret=settings.webhook_secret,
         )
         yield
         await shutdown_bot()

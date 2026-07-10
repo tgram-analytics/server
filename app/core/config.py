@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     # ── Bot webhook ───────────────────────────────────────────────────────
     webhook_base_url: str = ""
 
+    # Random shared secret echoed by Telegram in the
+    # X-Telegram-Bot-Api-Secret-Token header. Set via set_webhook(secret_token=...).
+    # Keeps the bot token out of the request path (and therefore out of logs).
+    # Telegram constrains this value: 1-256 chars, only A-Z a-z 0-9 _ - allowed.
+    webhook_secret: str = ""
+
     # ── Rate limiting ─────────────────────────────────────────────────────
     rate_limit_per_second: int = 100
 
