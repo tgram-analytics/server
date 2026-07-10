@@ -163,7 +163,7 @@ No schema migration is needed — Postgres `JSONB` stores arrays natively.
 One `proj_` API key handles both: embed it in your frontend **and** use it from
 your backend — events land in the same project.
 
-The **domain allowlist** (set via `/settings`) is a browser-only guard against
+The **domain allowlist** (set per project via `/projects` → **Settings**) is a browser-only guard against
 abuse of the public key embedded in your JS bundle. It works like this:
 
 | Caller | `Origin` header | Behavior |
@@ -183,12 +183,23 @@ An empty allowlist allows all origins.
 
 | Command | Description |
 |---|---|
-| `/start` | Greet the bot and see available commands |
+| `/start` | Home menu (first run shows a guided welcome) |
 | `/add <name>` | Create a new project and get its API key |
 | `/projects` | List all projects |
-| `/report <event>` | Get a chart for an event (with period/granularity controls) |
-| `/settings` | Configure retention and domain allowlist |
+| `/events` | Browse event types for a project |
+| `/report [event]` | Get a chart for an event (with period/granularity controls) |
+| `/digest` | Last-7-days summary (events, sessions, top events, deltas) across all projects |
+| `/overview` | Multi-line visits chart across all projects |
+| `/alerts` | List active alerts across all projects |
+| `/doctor` | Health check across all projects (silent projects, open allowlists) |
+| `/mcp` | Setup instructions for connecting an AI agent (MCP) |
+| `/mcp_token` | Manage static MCP access tokens (`/mcp_token new [label]` to create) |
 | `/help` | Show this command reference |
+| `/cancel` | Cancel the current multi-step operation |
+
+Project settings (retention, domain allowlist, API-key rotation) have no
+slash command — open `/projects`, pick a project, and use its **Settings**
+menu.
 
 ---
 
@@ -231,7 +242,7 @@ cp .env.example .env   # edit values
 ### Run locally (with Docker DB)
 
 ```bash
-make dev-db          # start postgres + quickchart in Docker
+make dev-db          # start postgres in Docker
 make migrate         # apply migrations
 uvicorn app.main:app --reload
 ```
@@ -333,13 +344,16 @@ See [PROJECT.md](../PROJECT.md) for full architecture documentation.
 
 ## Extension points
 
-The server exposes a small, stable set of hooks in [`app/extensions.py`](app/extensions.py) that downstream packages may use to customize behavior without forking. Three registries are available:
+The server exposes a small, stable set of hooks in [`app/extensions.py`](app/extensions.py) that downstream packages may use to customize behavior without forking. Six registries are available:
 
 | Hook | Purpose | Cardinality |
 |---|---|---|
 | `register_user_resolver(callable)` | Replace the default singleton User resolver | one (raises if registered twice) |
 | `register_project_pre_create(callable)` | Append a pre-flush quota/policy check | many (run in registration order) |
 | `register_bot_filter(filter)` | Append a bot-handler filter, AND-combined with the admin chat gate | many |
+| `register_http_router(prefix, router_or_app, lifespan=None)` | Mount a FastAPI `APIRouter` (or any ASGI app) at startup, with an optional lifespan composed into the main app's | many |
+| `register_mcp_token_verifier(verifier)` | Replace the default static MCP bearer-token verifier (backed by the `mcp_tokens` table) | one (raises if registered twice) |
+| `register_mcp_whoami_extra(callable)` | Append a hook that contributes extra fields to the `whoami` MCP tool output (merged last-write-wins) | many (run in registration order) |
 
 A plugin is any Python module that calls one or more of these from a top-level `register()` function. Plugins are discovered at server startup via two mechanisms (in this order):
 
@@ -431,5 +445,5 @@ In plain language:
 
 See the [FSL FAQ](https://fsl.software/) for details.
 
-The client SDKs (`tgram-analytics-js`, `-py`, `-dart`) remain under MIT so you
+The client SDKs (`tgram-analytics-js`, `-py`, `-flutter`) remain under MIT so you
 can ship them with any project.
