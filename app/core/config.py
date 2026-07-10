@@ -1,5 +1,7 @@
 """Application configuration loaded from environment variables."""
 
+import re
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -153,6 +155,20 @@ class Settings(BaseSettings):
     def database_url_must_not_be_empty(cls, v: str) -> str:
         if not v.strip():
             raise ValueError("DATABASE_URL must not be empty")
+        return v
+
+    @field_validator("webhook_secret")
+    @classmethod
+    def webhook_secret_must_match_telegram_charset(cls, v: str) -> str:
+        # Empty is allowed (long-polling deployments never set it; the route is
+        # fail-closed and init_bot raises when WEBHOOK_BASE_URL is set). When
+        # provided, Telegram accepts only 1-256 chars from A-Z a-z 0-9 _ - so
+        # reject anything else early rather than failing at set_webhook time.
+        if v and not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", v):
+            raise ValueError(
+                "WEBHOOK_SECRET may contain only A-Za-z0-9_- characters "
+                "(1-256 chars), per Telegram's secret_token constraint"
+            )
         return v
 
 
