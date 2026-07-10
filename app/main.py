@@ -131,6 +131,39 @@ def create_app() -> FastAPI:
         max_age=600,
     )
 
+    # Reject oversized request bodies by Content-Length BEFORE the body is
+    # read/parsed, so a huge payload can never be materialized in RAM. Pure
+    # ASGI middleware — runs ahead of routing and body consumption.
+    from starlette.types import ASGIApp, Receive, Scope, Send
+
+    _max_body = get_settings().max_request_body_bytes
+
+    class BodySizeLimitMiddleware:
+        def __init__(self, app: ASGIApp) -> None:
+            self.app = app
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            if scope["type"] == "http":
+                for name, value in scope.get("headers", []):
+                    if name == b"content-length" and value.isdigit() and int(value) > _max_body:
+                        await send(
+                            {
+                                "type": "http.response.start",
+                                "status": 413,
+                                "headers": [(b"content-type", b"application/json")],
+                            }
+                        )
+                        await send(
+                            {
+                                "type": "http.response.body",
+                                "body": b'{"detail":"Request body too large"}',
+                            }
+                        )
+                        return
+            await self.app(scope, receive, send)
+
+    app.add_middleware(BodySizeLimitMiddleware)
+
     app.include_router(health_router)
     app.include_router(projects_router)
     app.include_router(ingestion_router)
