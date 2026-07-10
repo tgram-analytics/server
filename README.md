@@ -188,7 +188,7 @@ An empty allowlist allows all origins.
 | `/projects` | List all projects |
 | `/events` | Browse event types for a project |
 | `/report [event]` | Get a chart for an event (with period/granularity controls) |
-| `/digest` | Last-7-days summary (events, sessions, top events, deltas) across all projects |
+| `/digest` | Last-7-days recap: sessions and alerted-event counts with week-over-week deltas, per project |
 | `/overview` | Multi-line visits chart across all projects |
 | `/alerts` | List active alerts across all projects |
 | `/doctor` | Health check across all projects (silent projects, open allowlists) |
