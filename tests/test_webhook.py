@@ -26,6 +26,19 @@ async def test_webhook_rejects_wrong_secret_header(client):
     assert resp.status_code == 403
 
 
+async def test_webhook_rejects_non_ascii_secret_header(client):
+    # A raw byte >127 on the wire: Starlette latin-1-decodes it into a
+    # non-ASCII str, and hmac.compare_digest(str, str) would raise TypeError
+    # on that path. The handler must still return a clean 403, not a 500.
+    # The value is passed as bytes so httpx does not ASCII-reject it locally.
+    resp = await client.post(
+        "/webhook",
+        json={"update_id": 1},
+        headers={"X-Telegram-Bot-Api-Secret-Token": b"wrong\xff"},
+    )
+    assert resp.status_code == 403
+
+
 async def test_webhook_old_token_in_url_path_is_gone(client):
     # The bot token must no longer be a valid URL path segment.
     resp = await client.post(

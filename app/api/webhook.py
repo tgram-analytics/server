@@ -24,8 +24,15 @@ async def telegram_webhook(
     x_telegram_bot_api_secret_token: str = Header(default=""),
 ) -> dict[str, bool]:
     """Receive and dispatch a Telegram update."""
+    # Compare on bytes: Starlette latin-1-decodes headers, so a non-ASCII
+    # byte in the header yields a non-ASCII str, and hmac.compare_digest on
+    # two str values raises TypeError unless both are pure ASCII. Encoding
+    # both sides keeps the comparison constant-time and returns a clean 403.
     expected = settings.webhook_secret
-    if not expected or not hmac.compare_digest(x_telegram_bot_api_secret_token, expected):
+    provided = x_telegram_bot_api_secret_token
+    if not expected or not hmac.compare_digest(
+        provided.encode("utf-8", "ignore"), expected.encode("utf-8")
+    ):
         raise HTTPException(status_code=403, detail="Invalid webhook token")
 
     data = await request.json()
