@@ -79,14 +79,24 @@ async def start_set_retention(
     assert isinstance(query.message, Message)
     chat_id = query.message.chat_id
 
+    try:
+        pid = uuid.UUID(project_id_str)
+    except ValueError:
+        await query.edit_message_text("❌ Invalid project reference.")
+        return
+
     factory = get_session_factory()
     async with factory() as session:
+        project = await get_project(session, pid, owner_user_id)
+        if project is None:
+            await query.edit_message_text("❌ Project not found.")
+            return
         svc = BotStateService(session)
         await svc.save(
             chat_id,
             flow="set_retention",
             step="value",
-            payload={"project_id": project_id_str},
+            payload={"project_id": project_id_str, "owner_user_id": str(owner_user_id)},
         )
         await session.commit()
 
@@ -264,6 +274,16 @@ async def handle_set_retention_text(
         await svc.clear(chat_id)
         await update.message.reply_text("❌ Invalid project reference. Please start over.")
         return
+
+    from app.services.projects import get_project
+
+    owner_raw = state.payload.get("owner_user_id")
+    if owner_raw:
+        owner_id = uuid.UUID(owner_raw)
+        if await get_project(session, pid, owner_id) is None:
+            await svc.clear(chat_id)
+            await update.message.reply_text("❌ Project not found.")
+            return
 
     ps_result = await session.execute(
         select(ProjectSettings).where(ProjectSettings.project_id == pid)

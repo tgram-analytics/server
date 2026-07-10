@@ -330,3 +330,46 @@ async def test_allow_all_button_clears_allowlist(session_factory, singleton_user
         result = await session.execute(select(Project).where(Project.id == uuid.UUID(pid)))
         p = result.scalar_one()
         assert p.domain_allowlist == []
+
+
+async def test_start_set_retention_rejects_foreign_project(session_factory, singleton_user):
+    """A caller who does not own the project cannot start the retention flow,
+    and no conversation state is saved for them."""
+    from app.bot.handlers.settings import start_set_retention
+    from app.bot.states import BotStateService
+    from app.models.user import User
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        victim = User(telegram_user_id=999_222)
+        session.add(victim)
+        await session.flush()
+        project, _ = await create_project(
+            session, name="victim.com", admin_chat_id=999_222, owner_user_id=victim.id
+        )
+        await session.commit()
+        victim_pid = str(project.id)
+        victim_id = victim.id
+
+    query = MagicMock()
+    query.message = MagicMock(spec=Message)
+    query.message.chat_id = ADMIN_ID
+    query.edit_message_text = AsyncMock()
+
+    await start_set_retention(query, victim_pid, singleton_user.id)
+
+    query.edit_message_text.assert_called_once()
+    assert "not found" in query.edit_message_text.call_args[0][0].lower()
+    async with session_factory() as session:
+        svc = BotStateService(session)
+        state = await svc.get(ADMIN_ID)
+        assert state is None
+
+    async with session_factory() as session:
+        from sqlalchemy import text
+
+        await session.execute(
+            text("DELETE FROM projects WHERE owner_user_id = :o"), {"o": str(victim_id)}
+        )
+        await session.execute(text("DELETE FROM users WHERE id = :i"), {"i": str(victim_id)})
+        await session.commit()
