@@ -275,8 +275,6 @@ async def handle_set_retention_text(
         await update.message.reply_text("❌ Invalid project reference. Please start over.")
         return
 
-    from app.services.projects import get_project
-
     owner_raw = state.payload.get("owner_user_id")
     if owner_raw:
         owner_id = uuid.UUID(owner_raw)
