@@ -16,6 +16,36 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_ingestion_ratelimiter():
+    """Isolate the module-level ingestion rate-limiter between tests.
+
+    The sliding-window limiter keeps state in module globals that live for the
+    whole process. Under ASGITransport every request's client IP is 127.0.0.1,
+    so without a reset one test's traffic leaks into the next and can trip the
+    pre-auth per-IP anon cap. We also lift the anon cap to a high value for the
+    general test harness (many tests legitimately flood 127.0.0.1 with a valid
+    key, which never happens in production where traffic spreads across IPs);
+    tests that specifically exercise the limiter monkeypatch it back down.
+    """
+    try:
+        import app.api.ingestion as ing
+    except Exception:
+        yield
+        return
+
+    ing._rate_windows.clear()
+    ing._rate_last_access.clear()
+    prev = ing._anon_rate_limit
+    ing._anon_rate_limit = 10_000
+    try:
+        yield
+    finally:
+        ing._rate_windows.clear()
+        ing._rate_last_access.clear()
+        ing._anon_rate_limit = prev
+
+
 def make_test_app(overrides: dict | None = None) -> FastAPI:
     """Create a FastAPI app with test-safe environment overrides.
 

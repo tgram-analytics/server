@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     # ── Rate limiting ─────────────────────────────────────────────────────
     rate_limit_per_second: int = 100
 
+    # Per-IP cap for unauthenticated ingestion traffic. Applied before the
+    # API-key lookup so invalid-key floods can't hammer the DB.
+    anon_rate_limit_per_second: int = 20
+
     # ── Request-body size limit ───────────────────────────────────────────
     # Hard cap (bytes) on request bodies. Enforced by an ASGI middleware via
     # the Content-Length header before the body is read, so oversized payloads

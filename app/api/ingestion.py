@@ -35,6 +35,11 @@ router = APIRouter(prefix="/api/v1", tags=["ingestion"])
 _rate_windows: dict[str, deque[float]] = defaultdict(deque)
 _rate_last_access: dict[str, float] = {}
 
+# Per-IP cap for unauthenticated ingestion traffic, applied BEFORE the API-key
+# lookup so invalid-key floods can't hammer the DB. Read from settings at import
+# time; kept as a module attribute so it can be monkeypatched in tests.
+_anon_rate_limit: int = get_settings().anon_rate_limit_per_second
+
 # Evict idle projects every N calls to prevent unbounded memory growth.
 _EVICTION_INTERVAL = 500
 _EVICTION_TTL = 60.0  # seconds since last access before eviction
@@ -49,10 +54,10 @@ def _evict_stale_entries(now: float) -> None:
         _rate_last_access.pop(k, None)
 
 
-def _is_rate_limited(project_id: uuid.UUID, limit: int) -> bool:
-    """Return True if this project has exceeded *limit* requests in the last second."""
+def _is_rate_limited(key: str | uuid.UUID, limit: int) -> bool:
+    """Return True if *key* has exceeded *limit* requests in the last second."""
     global _rate_call_count
-    key = str(project_id)
+    key = str(key)
     now = monotonic()
 
     _rate_call_count += 1
@@ -69,6 +74,12 @@ def _is_rate_limited(project_id: uuid.UUID, limit: int) -> bool:
         return True
     dq.append(now)
     return False
+
+
+def _is_ip_rate_limited(client_ip: str, limit: int) -> bool:
+    """Throttle unauthenticated traffic per source IP. Keyed 'ip:<addr>' so it
+    can never collide with project-id keys."""
+    return _is_rate_limited(f"ip:{client_ip}", limit)
 
 
 # ── Background task helper ─────────────────────────────────────────────────
@@ -192,6 +203,7 @@ async def _resolve_project(
     origin: str | None,
     session: AsyncSession,
     default_rate_limit: int,
+    client_ip: str,
 ) -> Project:
     """Validate API key, rate limit, and origin. Returns the Project.
 
@@ -200,7 +212,14 @@ async def _resolve_project(
     ``Settings.rate_limit_per_second``) when the column is NULL. Cloud
     overlays set the per-row override at project-create time so each
     plan tier gets its own cap.
+
+    Unauthenticated traffic is throttled per source IP *before* the API-key
+    lookup runs, so an anonymous attacker flooding invalid keys can't force an
+    un-throttled DB SELECT on every request.
     """
+    if _is_ip_rate_limited(client_ip, _anon_rate_limit):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
     project = await validate_api_key(api_key, session)
     if project is None:
         raise HTTPException(status_code=400, detail="Invalid API key")
@@ -231,11 +250,14 @@ async def track(
     Returns 202 immediately; alert evaluation runs as a background task.
     """
     origin = request.headers.get("origin")
-    project = await _resolve_project(body.api_key, origin, session, settings.rate_limit_per_second)
-
     # Privacy: derive visitor_hash and parsed-UA fields here; raw IP/UA never
-    # leave this function.
+    # leave this function. client_ip is also the key for the pre-auth per-IP
+    # throttle inside _resolve_project.
     client_ip = request.client.host if request.client else ""
+    project = await _resolve_project(
+        body.api_key, origin, session, settings.rate_limit_per_second, client_ip
+    )
+
     ua = request.headers.get("user-agent", "")
     visitor_hash = await hash_visitor(project.id, client_ip, ua)
     browser, os_name, device_type = parse_user_agent(ua)
@@ -274,11 +296,14 @@ async def pageview(
     columns as well as in ``properties`` for easy querying.
     """
     origin = request.headers.get("origin")
-    project = await _resolve_project(body.api_key, origin, session, settings.rate_limit_per_second)
-
     # Privacy: derive visitor_hash and parsed-UA fields here; raw IP/UA never
-    # leave this function.
+    # leave this function. client_ip is also the key for the pre-auth per-IP
+    # throttle inside _resolve_project.
     client_ip = request.client.host if request.client else ""
+    project = await _resolve_project(
+        body.api_key, origin, session, settings.rate_limit_per_second, client_ip
+    )
+
     ua = request.headers.get("user-agent", "")
     visitor_hash = await hash_visitor(project.id, client_ip, ua)
     browser, os_name, device_type = parse_user_agent(ua)
