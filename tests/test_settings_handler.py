@@ -373,3 +373,70 @@ async def test_start_set_retention_rejects_foreign_project(session_factory, sing
         )
         await session.execute(text("DELETE FROM users WHERE id = :i"), {"i": str(victim_id)})
         await session.commit()
+
+
+async def test_handle_set_retention_text_rejects_foreign_owner(session_factory, singleton_user):
+    """The retention text handler re-verifies ownership: an attacker whose
+    stashed owner id does not own the target project is refused, the victim's
+    retention is left untouched, and the conversation state is cleared."""
+    from sqlalchemy import select, text
+
+    from app.bot.handlers.settings import handle_set_retention_text
+    from app.bot.states import BotStateService
+    from app.models.settings import ProjectSettings
+    from app.models.user import User
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        victim = User(telegram_user_id=999_333)
+        session.add(victim)
+        await session.flush()
+        project, _ = await create_project(
+            session, name="victim-text.com", admin_chat_id=999_333, owner_user_id=victim.id
+        )
+        await session.commit()
+        victim_pid = str(project.id)
+        victim_id = victim.id
+
+    # Attacker (singleton_user) plants conversation state pointing at the
+    # victim's project but stamped with their OWN owner id.
+    async with session_factory() as session:
+        svc = BotStateService(session)
+        await svc.save(
+            ADMIN_ID,
+            flow="set_retention",
+            step="value",
+            payload={"project_id": victim_pid, "owner_user_id": str(singleton_user.id)},
+        )
+        await session.commit()
+
+    update, ctx = _make_message(chat_id=ADMIN_ID, text="1")
+
+    async with session_factory() as session:
+        svc = BotStateService(session)
+        state = await svc.get(ADMIN_ID)
+        await handle_set_retention_text(update, session, svc, state)
+        # The production auth wrapper commits after the handler returns.
+        await session.commit()
+
+    update.message.reply_text.assert_called_once()
+    assert "not found" in update.message.reply_text.call_args[0][0].lower()
+
+    async with session_factory() as session:
+        # Victim's retention stays at the default (90) — attacker's "1" never landed.
+        result = await session.execute(
+            select(ProjectSettings).where(ProjectSettings.project_id == uuid.UUID(victim_pid))
+        )
+        ps = result.scalar_one()
+        assert ps.retention_days == 90
+
+        # State was cleared.
+        svc = BotStateService(session)
+        assert await svc.get(ADMIN_ID) is None
+
+    async with session_factory() as session:
+        await session.execute(
+            text("DELETE FROM projects WHERE owner_user_id = :o"), {"o": str(victim_id)}
+        )
+        await session.execute(text("DELETE FROM users WHERE id = :i"), {"i": str(victim_id)})
+        await session.commit()
