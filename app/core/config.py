@@ -35,9 +35,19 @@ class Settings(BaseSettings):
     # ── Rate limiting ─────────────────────────────────────────────────────
     rate_limit_per_second: int = 100
 
-    # Per-IP cap for unauthenticated ingestion traffic. Applied before the
-    # API-key lookup so invalid-key floods can't hammer the DB.
-    anon_rate_limit_per_second: int = 20
+    # Two-tier per-IP throttle for ingestion, both applied before the API-key
+    # lookup so an attacker can't force an un-throttled DB SELECT per request.
+    #
+    # Tier 1 — coarse valve: a per-IP ceiling on ALL ingestion traffic, set far
+    # above any plausible legitimate single-IP rate. It only bounds worst-case
+    # DB load; it must never throttle a valid server-side SDK or NAT/proxy pool.
+    ingest_ip_rate_limit_per_second: int = 1000
+
+    # Tier 2 — invalid-key penalty: the real anti-flood control. Counts only
+    # requests whose API key fails validation. Once an IP is over budget the
+    # request is rejected BEFORE the DB lookup, so bad-key floods stop hitting
+    # the DB. Valid keys never touch this budget.
+    invalid_key_rate_limit_per_second: int = 10
 
     # ── Request-body size limit ───────────────────────────────────────────
     # Hard cap (bytes) on request bodies. Enforced by an ASGI middleware via
