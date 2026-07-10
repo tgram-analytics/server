@@ -30,15 +30,21 @@ from app.services.events import evaluate_alerts, insert_event, is_origin_allowed
 
 router = APIRouter(prefix="/api/v1", tags=["ingestion"])
 
-# ── In-memory per-project rate limiter (sliding 1-second window) ───────────
+# ── In-memory sliding-window rate limiter (1-second window) ────────────────
+#
+# NOTE: this limiter is process-local and in-memory. A multi-worker / multi-pod
+# deploy runs one copy per worker, so the effective cap is multiplied by the
+# worker count. This is a best-effort guard against accidental floods and cheap
+# DoS; a hard anti-DoS guarantee needs a shared store (Redis) or enforcement at
+# the edge (CDN / API gateway).
 
 _rate_windows: dict[str, deque[float]] = defaultdict(deque)
 _rate_last_access: dict[str, float] = {}
 
-# Per-IP cap for unauthenticated ingestion traffic, applied BEFORE the API-key
-# lookup so invalid-key floods can't hammer the DB. Read from settings at import
-# time; kept as a module attribute so it can be monkeypatched in tests.
-_anon_rate_limit: int = get_settings().anon_rate_limit_per_second
+# Two-tier per-IP throttle knobs, read from settings at import time. Kept as
+# module attributes so tests can monkeypatch them.
+_ingest_ip_rate_limit: int = get_settings().ingest_ip_rate_limit_per_second
+_invalid_key_rate_limit: int = get_settings().invalid_key_rate_limit_per_second
 
 # Evict idle projects every N calls to prevent unbounded memory growth.
 _EVICTION_INTERVAL = 500
@@ -47,15 +53,33 @@ _rate_call_count = 0
 
 
 def _evict_stale_entries(now: float) -> None:
-    """Remove rate-limiter state for projects idle longer than _EVICTION_TTL."""
+    """Remove rate-limiter state for keys idle longer than _EVICTION_TTL."""
     stale = [k for k, t in _rate_last_access.items() if now - t > _EVICTION_TTL]
     for k in stale:
         _rate_windows.pop(k, None)
         _rate_last_access.pop(k, None)
 
 
-def _is_rate_limited(key: str | uuid.UUID, limit: int) -> bool:
-    """Return True if *key* has exceeded *limit* requests in the last second."""
+def _is_over_limit(key: str | uuid.UUID, limit: int) -> bool:
+    """Read-only check: True if *key* is at/over *limit* hits in the last second.
+
+    Prunes the sliding window but does NOT append, so calling this can never
+    consume a key's budget. Use it for a pre-flight check that must not itself
+    count as a hit (e.g. gating a valid-key request on the invalid-key budget).
+    """
+    key = str(key)
+    now = monotonic()
+    dq = _rate_windows.get(key)
+    if not dq:
+        return False
+    cutoff = now - 1.0
+    while dq and dq[0] < cutoff:
+        dq.popleft()
+    return len(dq) >= limit
+
+
+def _record_hit(key: str | uuid.UUID) -> None:
+    """Append one hit for *key* at the current time (and run periodic eviction)."""
     global _rate_call_count
     key = str(key)
     now = monotonic()
@@ -66,19 +90,21 @@ def _is_rate_limited(key: str | uuid.UUID, limit: int) -> bool:
         _evict_stale_entries(now)
 
     _rate_last_access[key] = now
-    dq = _rate_windows[key]
-    cutoff = now - 1.0
-    while dq and dq[0] < cutoff:
-        dq.popleft()
-    if len(dq) >= limit:
+    _rate_windows[key].append(now)
+
+
+def _is_rate_limited(key: str | uuid.UUID, limit: int) -> bool:
+    """Check-and-record: True (without recording) if *key* is already over
+    *limit*, otherwise record one hit and return False."""
+    if _is_over_limit(key, limit):
         return True
-    dq.append(now)
+    _record_hit(key)
     return False
 
 
 def _is_ip_rate_limited(client_ip: str, limit: int) -> bool:
-    """Throttle unauthenticated traffic per source IP. Keyed 'ip:<addr>' so it
-    can never collide with project-id keys."""
+    """Tier 1 coarse valve: cap ALL ingestion per source IP. Keyed 'ip:<addr>'
+    so it can never collide with project-id keys. Counts every request."""
     return _is_rate_limited(f"ip:{client_ip}", limit)
 
 
@@ -213,15 +239,32 @@ async def _resolve_project(
     overlays set the per-row override at project-create time so each
     plan tier gets its own cap.
 
-    Unauthenticated traffic is throttled per source IP *before* the API-key
-    lookup runs, so an anonymous attacker flooding invalid keys can't force an
-    un-throttled DB SELECT on every request.
+    Two per-IP guards run *before* ``validate_api_key`` so an attacker can't
+    force an un-throttled DB SELECT on every request:
+
+    * Tier 1 (coarse valve): a high per-IP ceiling on all ingestion traffic,
+      set far above any legitimate single-IP rate. Bounds worst-case DB load
+      without throttling valid server-side SDKs or NAT/proxy pools.
+    * Tier 2 (invalid-key penalty): a strict per-IP budget that counts only
+      failed key lookups. It is *checked* (read-only) before the DB lookup, so
+      an IP already over budget is rejected without touching the DB, and a
+      failed lookup *records* one hit afterwards. Valid keys never consume it.
     """
-    if _is_ip_rate_limited(client_ip, _anon_rate_limit):
+    # Tier 1: coarse per-IP valve over all traffic.
+    if _is_ip_rate_limited(client_ip, _ingest_ip_rate_limit):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    # Tier 2 pre-check: read-only, so a valid-key request never spends the
+    # invalid-key budget. If this IP is already over budget, block before the
+    # DB lookup runs.
+    badkey_key = f"ip:badkey:{client_ip}"
+    if _is_over_limit(badkey_key, _invalid_key_rate_limit):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     project = await validate_api_key(api_key, session)
     if project is None:
+        # Charge one attempt against this IP's invalid-key budget.
+        _record_hit(badkey_key)
         raise HTTPException(status_code=400, detail="Invalid API key")
 
     effective_limit = project.rate_limit_per_second or default_rate_limit
