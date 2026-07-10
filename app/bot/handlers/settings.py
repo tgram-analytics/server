@@ -147,7 +147,12 @@ def _build_allowlist_prompt(
 
 
 async def _save_allowlist_state(
-    chat_id: int, project_id_str: str, owner_user_id: uuid.UUID | None = None
+    chat_id: int,
+    project_id_str: str,
+    # Callers passing no owner MUST guarantee project_id_str is the caller's own
+    # project (post-create path); handle_set_allowlist_text skips the ownership
+    # re-check when no owner is stashed.
+    owner_user_id: uuid.UUID | None = None,
 ) -> None:
     """Persist the conversation state so the next text reply is treated as an allowlist."""
     payload: dict[str, str] = {"project_id": project_id_str}
@@ -225,9 +230,13 @@ async def handle_allow_all(
         svc = BotStateService(session)
         await svc.clear(chat_id)
 
-        # Clear the allowlist
+        # Clear the allowlist. Owner is scoped into the predicate as
+        # defense-in-depth: even if the pre-check above is ever bypassed,
+        # the write can never clear a project the caller does not own.
         await session.execute(
-            sql_update(Project).where(Project.id == pid).values(domain_allowlist=[])
+            sql_update(Project)
+            .where(Project.id == pid, Project.owner_user_id == owner_user_id)
+            .values(domain_allowlist=[])
         )
         await session.commit()
 
