@@ -85,6 +85,30 @@ def test_redacts_sk_test_token() -> None:
     assert "[REDACTED]" in record.getMessage()
 
 
+def test_redacts_telegram_bot_token(redactor: RedactingFilter) -> None:
+    """Telegram bot tokens (``<digits>:<30+ chars>``) are redacted.
+
+    The bot token used to sit in the /webhook/{token} URL path and would land
+    verbatim in uvicorn access logs; the filter now scrubs it.
+    """
+    token = "1234567890:test-token-for-testing-only-AAaaBBbb"
+    record = _make_record(f"set_webhook url=https://x.com/webhook token={token}")
+    redactor.filter(record)
+    out = record.getMessage()
+    assert token not in out
+    assert "[REDACTED]" in out
+
+
+def test_redacts_mcp_bearer_token(redactor: RedactingFilter) -> None:
+    """``mcp_<64 hex>`` bearer tokens are redacted."""
+    token = "mcp_" + ("a" * 64)
+    record = _make_record(f"authorization: Bearer {token}")
+    redactor.filter(record)
+    out = record.getMessage()
+    assert token not in out
+    assert "[REDACTED]" in out
+
+
 def test_filter_installed_on_root_logger() -> None:
     """Importing ``app.main`` installs a ``RedactingFilter`` on the root logger."""
     # Importing for side-effects: ``create_app()`` runs at import time.
