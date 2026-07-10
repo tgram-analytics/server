@@ -1,9 +1,10 @@
 // Add to pubspec.yaml:
 //   dependencies:
-//     {{ package_name.replace('-', '_') }}: ^0.1.0
+//     {{ package_name.replace('-', '_') }}: ^0.2.0
 import 'package:{{ package_name.replace('-', '_') }}/{{ package_name.replace('-', '_') }}.dart';
 
-final tga = TGA(apiKey: '{{ api_key }}', serverUrl: '{{ server_url }}');
+// Initialize once (e.g. in main):
+TGA.init('{{ api_key }}', '{{ server_url }}');
 
-// Track an event
-tga.track(eventName: 'signup', properties: {'plan': 'free'});
+// Track an event (sessionId groups events from one user/session)
+TGA.track('signup', 'session-123', properties: {'plan': 'free'});

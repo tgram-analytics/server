@@ -46,17 +46,22 @@ def test_snippet_renders_with_expected_init_pattern(platform: str, expected_subs
     )
 
 
-def test_js_snippet_uses_serverurl_camelcase():
+def test_js_snippet_matches_sdk_init_signature():
     template = _env.get_template("js.jinja2")
     rendered = template.render(
         api_key="k",
         server_url="https://api.example",
         package_name="tgram-analytics",
     )
-    # JS SDK convention is camelCase — verify our template hasn't
-    # drifted to snake_case.
+    # The JS SDK exposes a *default* export — a named import would be
+    # undefined at runtime.
+    assert "import TGA from 'tgram-analytics'" in rendered
+    assert "import { TGA }" not in rendered
+    # init(apiKey, options): key is the first positional argument; only
+    # serverUrl lives in the options object (camelCase, not snake_case).
+    assert "TGA.init('k', {" in rendered
     assert "serverUrl" in rendered
-    assert "apiKey" in rendered
+    assert "apiKey" not in rendered
 
 
 def test_python_snippet_uses_snake_case_kwargs():
@@ -70,15 +75,22 @@ def test_python_snippet_uses_snake_case_kwargs():
     assert "server_url=" in rendered
 
 
-def test_flutter_snippet_uses_camelcase_kwargs():
+def test_flutter_snippet_matches_sdk_init_signature():
     template = _env.get_template("flutter.jinja2")
     rendered = template.render(
         api_key="k",
         server_url="https://api.example",
         package_name="tgram_analytics",
     )
-    assert "apiKey:" in rendered
-    assert "serverUrl:" in rendered
+    # The Dart SDK is a singleton: static TGA.init(apiKey, serverUrl) with
+    # both arguments positional. There is no public constructor.
+    assert "TGA.init('k', 'https://api.example')" in rendered
+    assert "TGA(apiKey:" not in rendered
+    # track(eventName, sessionId, {properties}) — sessionId is required.
+    assert "TGA.track('signup', 'session-123'" in rendered
+    # Version pin must track the released SDK (pubspec.yaml: 0.2.0).
+    assert "^0.2.0" in rendered
+    assert "^0.1.0" not in rendered
 
 
 def test_active_input_is_rendered_verbatim():
