@@ -165,6 +165,26 @@ def create_app() -> FastAPI:
 
     app.add_middleware(BodySizeLimitMiddleware)
 
+    # Serve bare /mcp in place instead of 307-redirecting to /mcp/. The MCP
+    # surface is a Starlette Mount("/mcp", ...), whose compiled pattern only
+    # matches "/mcp/..." — a request to exactly "/mcp" falls through to the
+    # router's redirect_slashes 307. The protected-resource metadata
+    # advertises the RFC 8707 resource URI without a trailing slash, so MCP
+    # clients POST the bare path, and httpx-based SDK clients never follow
+    # redirects on POST: the redirect reads as "server not found". Pure ASGI
+    # (not BaseHTTPMiddleware) because the MCP app streams SSE responses.
+    class MCPPathRewriteMiddleware:
+        def __init__(self, app: ASGIApp) -> None:
+            self.app = app
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            if scope["type"] == "http" and scope.get("path") == "/mcp":
+                scope["path"] = "/mcp/"
+                scope["raw_path"] = b"/mcp/"
+            await self.app(scope, receive, send)
+
+    app.add_middleware(MCPPathRewriteMiddleware)
+
     app.include_router(health_router)
     app.include_router(projects_router)
     app.include_router(ingestion_router)
