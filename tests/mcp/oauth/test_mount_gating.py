@@ -48,8 +48,13 @@ async def test_oauth_flag_off_unmounts():
 
 
 @pytest.mark.asyncio
-async def test_forwarded_proto_yields_https_redirect(app_client):
-    """Behind a TLS-terminating proxy the /mcp 307 must point at https, not http."""
+async def test_forwarded_proto_bare_mcp_served_in_place(app_client):
+    """Behind a TLS-terminating proxy the bare /mcp path is served directly.
+
+    This used to assert the 307's Location was https; MCPPathRewriteMiddleware
+    removed the redirect entirely, which supersedes that concern — clients
+    that never follow POST redirects now work regardless of proxy scheme.
+    """
     r = await app_client.post(
         "/mcp",
         json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
@@ -60,5 +65,5 @@ async def test_forwarded_proto_yields_https_redirect(app_client):
         },
         follow_redirects=False,
     )
-    assert r.status_code == 307
-    assert r.headers["location"].startswith("https://")
+    assert r.status_code == 401
+    assert "location" not in r.headers

@@ -32,6 +32,24 @@ async def test_mcp_requires_bearer_token(app_client):
 
 
 @pytest.mark.asyncio
+async def test_mcp_bare_path_served_without_redirect(app_client):
+    """POST to bare /mcp must be served directly, never 307-redirected.
+
+    The protected-resource metadata advertises the RFC 8707 resource URI as
+    ``.../mcp`` (no trailing slash), so every MCP client POSTs the bare path
+    — and httpx-based SDK clients do not follow redirects on POST. A 307 to
+    ``/mcp/`` therefore reads as "server not found" in Claude and friends.
+    """
+    resp = await app_client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        headers={"Accept": "application/json, text/event-stream"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_mcp_disabled_unmounts(app_client_mcp_disabled):
     resp = await app_client_mcp_disabled.get("/mcp/_health")
     assert resp.status_code == 404
@@ -44,7 +62,9 @@ async def test_mcp_client_lists_tools_with_static_token(app_client_with_token):
     from mcp.client.session import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
 
-    mcp_url = str(client.base_url).rstrip("/") + "/mcp/"
+    # Bare path, no trailing slash — the URL users configure and the RFC 8707
+    # resource URI in the metadata. Must work without a redirect hop.
+    mcp_url = str(client.base_url).rstrip("/") + "/mcp"
     async with (
         streamablehttp_client(
             url=mcp_url,
