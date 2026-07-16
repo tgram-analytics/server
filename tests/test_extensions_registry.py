@@ -150,6 +150,42 @@ def test_reset_clears_all_three_registries() -> None:
     assert ext.get_bot_filters() == ()
 
 
+# ── MCP token verifier + whoami extras ────────────────────────────────────────
+
+
+def test_register_mcp_token_verifier_roundtrip():
+    from app import extensions as ext
+
+    sentinel = object()
+    assert ext.get_mcp_token_verifier() is None
+    ext.register_mcp_token_verifier(sentinel)
+    assert ext.get_mcp_token_verifier() is sentinel
+
+
+def test_register_mcp_token_verifier_twice_raises():
+    import pytest
+
+    from app import extensions as ext
+
+    ext.register_mcp_token_verifier(object())
+    with pytest.raises(RuntimeError):
+        ext.register_mcp_token_verifier(object())
+
+
+def test_register_mcp_whoami_extra_appends_in_order():
+    from app import extensions as ext
+
+    async def a(session, user):  # pragma: no cover - never called here
+        return {}
+
+    async def b(session, user):  # pragma: no cover
+        return {}
+
+    ext.register_mcp_whoami_extra(a)
+    ext.register_mcp_whoami_extra(b)
+    assert ext.get_mcp_whoami_extras() == (a, b)
+
+
 # ── Public surface guard ──────────────────────────────────────────────────────
 
 
@@ -169,10 +205,14 @@ def test_public_surface_is_stable() -> None:
         "register_project_pre_create",
         "register_bot_filter",
         "register_http_router",
+        "register_mcp_token_verifier",
+        "register_mcp_whoami_extra",
         "get_user_resolver",
         "get_project_pre_create_hooks",
         "get_bot_filters",
         "get_registered_http_routers",
+        "get_mcp_token_verifier",
+        "get_mcp_whoami_extras",
     }
     actual_public = {name for name in vars(ext) if not name.startswith("_")}
     # Allow imports to leak in but require all expected names present.

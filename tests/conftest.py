@@ -16,6 +16,35 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+@pytest.fixture(autouse=True)
+def _isolate_ingestion_ratelimiter():
+    """Isolate the module-level ingestion rate-limiter between tests.
+
+    The sliding-window limiter keeps state in module globals that live for the
+    whole process. Under ASGITransport every request's client IP is 127.0.0.1,
+    so without a reset one test's traffic leaks into the next. Clearing the
+    windows before and after each test keeps the suite deterministic.
+
+    We do NOT inflate the limits: the production defaults are sane (the tier-1
+    coarse valve is 1000/s, well above the ~100 req/s the e2e throughput test
+    drives from a single IP), so tests run against the real caps. Tests that
+    exercise the throttle monkeypatch the specific knob they need.
+    """
+    try:
+        import app.api.ingestion as ing
+    except Exception:
+        yield
+        return
+
+    ing._rate_windows.clear()
+    ing._rate_last_access.clear()
+    try:
+        yield
+    finally:
+        ing._rate_windows.clear()
+        ing._rate_last_access.clear()
+
+
 def make_test_app(overrides: dict | None = None) -> FastAPI:
     """Create a FastAPI app with test-safe environment overrides.
 
@@ -73,6 +102,7 @@ async def client() -> AsyncClient:
     )
     os.environ.setdefault("SECRET_KEY", "test-secret-key-not-for-production")
     os.environ.setdefault("WEBHOOK_BASE_URL", "https://example.com")
+    os.environ.setdefault("WEBHOOK_SECRET", "test-webhook-secret")
 
     from collections.abc import AsyncGenerator
     from contextlib import asynccontextmanager

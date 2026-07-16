@@ -2,11 +2,11 @@
 
 # ─── Development ──────────────────────────────────────────────────────────────
 
-dev:  ## Start the full stack (server + db + quickchart)
+dev:  ## Start the full stack (server + db)
 	docker compose up --build
 
 dev-db:  ## Start only the database (useful when running the server locally)
-	docker compose up db quickchart
+	docker compose up db
 
 # ─── Testing ──────────────────────────────────────────────────────────────────
 

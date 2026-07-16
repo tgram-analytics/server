@@ -65,6 +65,13 @@ def test_dart_snippet_contains_pub_add_and_track() -> None:
     body = _SDK_RENDERERS["dart"]("https://example.com")
     assert "flutter pub add tgram_analytics" in body
     assert "&lt;YOUR_API_KEY&gt;" in body
+    # The Dart SDK is a singleton: static TGA.init(apiKey, serverUrl), both
+    # positional, and static TGA.track(eventName, sessionId) — there is no
+    # public constructor and track() is void (not awaitable).
+    assert "TGA.init(" in body
+    assert "TGA.track(&#39;app_open&#39;, &#39;session-123&#39;)" in body
+    assert "TGA(apiKey:" not in body
+    assert "await" not in body
 
 
 # ── send_first_run_welcome ────────────────────────────────────────────────────

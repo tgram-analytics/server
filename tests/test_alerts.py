@@ -288,6 +288,50 @@ async def test_alert_add_starts_conversation(session_factory, singleton_user):
     assert "event name" in text.lower()
 
 
+async def test_start_add_alert_rejects_foreign_project(session_factory, singleton_user):
+    """A non-owner cannot begin creating an alert on another tenant's project."""
+    from sqlalchemy import text
+    from telegram import Message
+
+    from app.bot.handlers.alerts import _start_add_alert
+    from app.bot.states import BotStateService
+    from app.models.user import User
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        victim = User(telegram_user_id=999_444)
+        session.add(victim)
+        await session.flush()
+        project, _ = await create_project(
+            session, name="victim3.com", admin_chat_id=999_444, owner_user_id=victim.id
+        )
+        await session.commit()
+        victim_pid = str(project.id)
+        victim_id = victim.id
+
+    # Use a chat id no other test touches so the "no state saved" assertion
+    # isolates THIS handler's behaviour (ADMIN_ID=111 is polluted by other
+    # tests that seed add-alert state and never clear it).
+    foreign_chat_id = 222
+
+    query = MagicMock()
+    query.message = MagicMock(spec=Message)
+    query.message.chat_id = foreign_chat_id
+    query.edit_message_text = AsyncMock()
+
+    await _start_add_alert(query, victim_pid, singleton_user.id)
+
+    query.edit_message_text.assert_called_once()
+    assert "not found" in query.edit_message_text.call_args[0][0].lower()
+    async with session_factory() as session:
+        assert await BotStateService(session).get(foreign_chat_id) is None
+        await session.execute(
+            text("DELETE FROM projects WHERE owner_user_id = :o"), {"o": str(victim_id)}
+        )
+        await session.execute(text("DELETE FROM users WHERE id = :i"), {"i": str(victim_id)})
+        await session.commit()
+
+
 async def test_alert_delete_removes_alert(session_factory, singleton_user):
     from app.bot.handlers.alerts import alert_callback
     from app.services.alerts import create_alert, list_alerts

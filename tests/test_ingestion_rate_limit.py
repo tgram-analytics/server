@@ -54,11 +54,15 @@ async def test_resolve_uses_project_override_when_set() -> None:
 
     with patch.object(ingestion, "validate_api_key", AsyncMock(return_value=proj)):
         # First call passes…
-        result = await ingestion._resolve_project("k", None, session, default_rate_limit=100)
+        result = await ingestion._resolve_project(
+            "k", None, session, default_rate_limit=100, client_ip="1.2.3.4"
+        )
         assert result is proj
         # …second call within the same second hits the per-project cap.
         with pytest.raises(HTTPException) as exc:
-            await ingestion._resolve_project("k", None, session, default_rate_limit=100)
+            await ingestion._resolve_project(
+                "k", None, session, default_rate_limit=100, client_ip="1.2.3.4"
+            )
         assert exc.value.status_code == 429
 
 
@@ -71,10 +75,16 @@ async def test_resolve_falls_back_to_default_when_override_is_null() -> None:
 
     with patch.object(ingestion, "validate_api_key", AsyncMock(return_value=proj)):
         # default=2 → first two calls pass, third is throttled.
-        await ingestion._resolve_project("k", None, session, default_rate_limit=2)
-        await ingestion._resolve_project("k", None, session, default_rate_limit=2)
+        await ingestion._resolve_project(
+            "k", None, session, default_rate_limit=2, client_ip="1.2.3.4"
+        )
+        await ingestion._resolve_project(
+            "k", None, session, default_rate_limit=2, client_ip="1.2.3.4"
+        )
         with pytest.raises(HTTPException) as exc:
-            await ingestion._resolve_project("k", None, session, default_rate_limit=2)
+            await ingestion._resolve_project(
+                "k", None, session, default_rate_limit=2, client_ip="1.2.3.4"
+            )
         assert exc.value.status_code == 429
 
 
@@ -93,5 +103,7 @@ async def test_resolve_zero_override_treated_as_unset() -> None:
 
     with patch.object(ingestion, "validate_api_key", AsyncMock(return_value=proj)):
         # Default of 1 admits the first call; a 0 override would have rejected it.
-        result = await ingestion._resolve_project("k", None, session, default_rate_limit=1)
+        result = await ingestion._resolve_project(
+            "k", None, session, default_rate_limit=1, client_ip="1.2.3.4"
+        )
         assert result is proj

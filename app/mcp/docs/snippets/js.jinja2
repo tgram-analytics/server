@@ -1,0 +1,9 @@
+// Install: npm install {{ package_name }}
+import TGA from '{{ package_name }}';
+
+TGA.init('{{ api_key }}', {
+  serverUrl: '{{ server_url }}',
+});
+
+// Pageviews are tracked automatically. Track custom events:
+TGA.track('signup', { plan: 'free' });

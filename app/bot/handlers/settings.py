@@ -79,14 +79,24 @@ async def start_set_retention(
     assert isinstance(query.message, Message)
     chat_id = query.message.chat_id
 
+    try:
+        pid = uuid.UUID(project_id_str)
+    except ValueError:
+        await query.edit_message_text("❌ Invalid project reference.")
+        return
+
     factory = get_session_factory()
     async with factory() as session:
+        project = await get_project(session, pid, owner_user_id)
+        if project is None:
+            await query.edit_message_text("❌ Project not found.")
+            return
         svc = BotStateService(session)
         await svc.save(
             chat_id,
             flow="set_retention",
             step="value",
-            payload={"project_id": project_id_str},
+            payload={"project_id": project_id_str, "owner_user_id": str(owner_user_id)},
         )
         await session.commit()
 
@@ -136,8 +146,18 @@ def _build_allowlist_prompt(
     return text, keyboard
 
 
-async def _save_allowlist_state(chat_id: int, project_id_str: str) -> None:
+async def _save_allowlist_state(
+    chat_id: int,
+    project_id_str: str,
+    # Callers passing no owner MUST guarantee project_id_str is the caller's own
+    # project (post-create path); handle_set_allowlist_text skips the ownership
+    # re-check when no owner is stashed.
+    owner_user_id: uuid.UUID | None = None,
+) -> None:
     """Persist the conversation state so the next text reply is treated as an allowlist."""
+    payload: dict[str, str] = {"project_id": project_id_str}
+    if owner_user_id is not None:
+        payload["owner_user_id"] = str(owner_user_id)
     factory = get_session_factory()
     async with factory() as session:
         svc = BotStateService(session)
@@ -145,7 +165,7 @@ async def _save_allowlist_state(chat_id: int, project_id_str: str) -> None:
             chat_id,
             flow="set_allowlist",
             step="value",
-            payload={"project_id": project_id_str},
+            payload=payload,
         )
         await session.commit()
 
@@ -171,7 +191,7 @@ async def start_set_allowlist(
             return
         project_name = project.name
 
-    await _save_allowlist_state(chat_id, project_id_str)
+    await _save_allowlist_state(chat_id, project_id_str, owner_user_id)
 
     text, keyboard = _build_allowlist_prompt(project_name, project_id_str)
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
@@ -201,13 +221,22 @@ async def handle_allow_all(
 
     factory = get_session_factory()
     async with factory() as session:
+        project = await get_project(session, pid, owner_user_id)
+        if project is None:
+            await query.edit_message_text("❌ Project not found.")
+            return
+
         # Clear conversation state if any
         svc = BotStateService(session)
         await svc.clear(chat_id)
 
-        # Clear the allowlist
+        # Clear the allowlist. Owner is scoped into the predicate as
+        # defense-in-depth: even if the pre-check above is ever bypassed,
+        # the write can never clear a project the caller does not own.
         await session.execute(
-            sql_update(Project).where(Project.id == pid).values(domain_allowlist=[])
+            sql_update(Project)
+            .where(Project.id == pid, Project.owner_user_id == owner_user_id)
+            .values(domain_allowlist=[])
         )
         await session.commit()
 
@@ -265,6 +294,14 @@ async def handle_set_retention_text(
         await update.message.reply_text("❌ Invalid project reference. Please start over.")
         return
 
+    owner_raw = state.payload.get("owner_user_id")
+    if owner_raw:
+        owner_id = uuid.UUID(owner_raw)
+        if await get_project(session, pid, owner_id) is None:
+            await svc.clear(chat_id)
+            await update.message.reply_text("❌ Project not found.")
+            return
+
     ps_result = await session.execute(
         select(ProjectSettings).where(ProjectSettings.project_id == pid)
     )
@@ -299,6 +336,14 @@ async def handle_set_allowlist_text(
         await svc.clear(chat_id)
         await update.message.reply_text("❌ Invalid project reference. Please start over.")
         return
+
+    owner_raw = state.payload.get("owner_user_id")
+    if owner_raw:
+        owner_id = uuid.UUID(owner_raw)
+        if await get_project(session, pid, owner_id) is None:
+            await svc.clear(chat_id)
+            await update.message.reply_text("❌ Project not found.")
+            return
 
     domains = normalize_origin_entries(raw.split(","))
 

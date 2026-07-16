@@ -18,7 +18,7 @@ Apache License 2.0.
   The ingestion API, the Telegram bot handlers for reports/alerts/funnels, the
   models, the schemas. Self-hosters get 100% of today's functionality.
 - **Client SDKs** (`tgram-analytics-js`, `tgram-analytics-py`,
-  `tgram-analytics-dart`) — MIT-licensed. Contributions welcome under MIT.
+  `tgram-analytics-flutter`) — MIT-licensed. Contributions welcome under MIT.
 - **Hosted control plane** — closed source. Signup orchestration, billing,
   tenant provisioning, and quota enforcement for the hosted service live in a
   private repo. We do not accept external contributions there.

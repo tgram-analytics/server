@@ -10,6 +10,8 @@ from app.models.alert import Alert, AlertCondition
 from app.models.bot_conversation_state import BotConversationState
 from app.models.event import Event
 from app.models.funnel import Funnel
+from app.models.mcp_oauth import MCPSelfhostOAuthClient, MCPSelfhostOAuthCode
+from app.models.mcp_token import MCPToken
 from app.models.project import Project
 from app.models.scheduled_report import ChartPeriod, ReportFrequency, ScheduledReport
 from app.models.settings import ProjectSettings
@@ -24,6 +26,9 @@ __all__ = [
     "Alert",
     "AlertCondition",
     "Funnel",
+    "MCPSelfhostOAuthClient",
+    "MCPSelfhostOAuthCode",
+    "MCPToken",
     "ScheduledReport",
     "ReportFrequency",
     "ChartPeriod",

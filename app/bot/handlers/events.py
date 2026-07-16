@@ -454,7 +454,11 @@ async def _start_alert_for_event(query: CallbackQuery, owner_user_id: uuid.UUID)
             query.message.chat_id,
             flow="add_alert",
             step="condition",
-            payload={"project_id": project_id_str, "event_name": event_name},
+            payload={
+                "project_id": project_id_str,
+                "event_name": event_name,
+                "owner_user_id": str(owner_user_id),
+            },
         )
         await session.commit()
 

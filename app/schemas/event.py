@@ -13,6 +13,10 @@ _MAX_PAST = timedelta(days=365)
 # Cap number of entries in properties dict to prevent resource exhaustion.
 _MAX_PROPERTIES = 100
 
+# Max length of a single scalar string property value (8 KB). Caps memory a
+# single event can force the server to materialize from one property.
+_MAX_VALUE_LEN = 8192
+
 # A property value is one of these scalars, or a list of them. ``bool`` is a
 # subclass of ``int`` in Python — isinstance check just works.
 _ScalarTypes = (str, int, float, bool, type(None))
@@ -59,6 +63,8 @@ def _validate_property_value(key: str, value: Any) -> Any:
     list type, and the sort-on-write rule applies uniformly.
     """
     if _is_scalar(value):
+        if isinstance(value, str) and len(value) > _MAX_VALUE_LEN:
+            raise ValueError(f"properties[{key!r}] string value exceeds {_MAX_VALUE_LEN} chars")
         return value
 
     if isinstance(value, list):
@@ -70,6 +76,10 @@ def _validate_property_value(key: str, value: Any) -> Any:
                     f"got {type(item).__name__}. "
                     "Arrays may only contain scalar primitives — "
                     "objects, nested arrays, and undefined are not allowed."
+                )
+            if isinstance(item, str) and len(item) > _MAX_VALUE_LEN:
+                raise ValueError(
+                    f"properties[{key!r}][{i}] string value exceeds {_MAX_VALUE_LEN} chars"
                 )
         try:
             return sorted(value)

@@ -38,6 +38,8 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     from app.bot.handlers.events import events_callback, events_command
     from app.bot.handlers.export import export_callback
     from app.bot.handlers.funnels import funnel_callback
+    from app.bot.handlers.mcp import mcp_command
+    from app.bot.handlers.mcp_tokens import mcp_token_callback, mcp_token_command
     from app.bot.handlers.onboarding import onboarding_callback
     from app.bot.handlers.overview import overview_command
     from app.bot.handlers.projects import add_command, project_callback, projects_command
@@ -83,6 +85,8 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     app.add_handler(CommandHandler("overview", overview_command, filters=admin_filter))
     app.add_handler(CommandHandler("alerts", alerts_command, filters=admin_filter))
     app.add_handler(CommandHandler("doctor", doctor_command, filters=admin_filter))
+    app.add_handler(CommandHandler("mcp", mcp_command, filters=admin_filter))
+    app.add_handler(CommandHandler("mcp_token", mcp_token_command, filters=admin_filter))
 
     # Callback queries don't support CommandHandler filters directly — we
     # guard inside the handler using the same admin_chat_id check.
@@ -92,6 +96,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     app.add_handler(CallbackQueryHandler(export_callback, pattern=r"^exp:"))
     app.add_handler(CallbackQueryHandler(funnel_callback, pattern=r"^(fnl_|back:funnels:)"))
     app.add_handler(CallbackQueryHandler(onboarding_callback, pattern=r"^onb:"))
+    app.add_handler(CallbackQueryHandler(mcp_token_callback, pattern=r"^mcptok:"))
     app.add_handler(CallbackQueryHandler(project_callback))
 
     # Text messages for multi-step conversation flows (e.g., add-alert)
@@ -115,7 +120,12 @@ def get_bot() -> Bot:
     return bot
 
 
-async def init_bot(token: str, admin_chat_id: int, webhook_base_url: str = "") -> None:
+async def init_bot(
+    token: str,
+    admin_chat_id: int,
+    webhook_base_url: str = "",
+    webhook_secret: str = "",
+) -> None:
     """Initialise the bot application and optionally register the webhook."""
     global _application
 
@@ -146,20 +156,31 @@ async def init_bot(token: str, admin_chat_id: int, webhook_base_url: str = "") -
             BotCommand("alerts", "List active alerts"),
             BotCommand("add", "Create a new project"),
             BotCommand("doctor", "Health check across all projects"),
+            BotCommand("mcp", "Connect an AI agent (MCP)"),
             BotCommand("help", "Show help"),
             BotCommand("cancel", "Cancel current operation"),
         ]
     )
 
     if webhook_base_url:
-        webhook_url = f"{webhook_base_url.rstrip('/')}/webhook/{token}"
+        # The secret is echoed back by Telegram in the
+        # X-Telegram-Bot-Api-Secret-Token header and is the ONLY thing the
+        # webhook endpoint trusts. Registering without it would leave the
+        # endpoint fail-closed (rejecting every update), so refuse loudly.
+        if not webhook_secret:
+            raise RuntimeError(
+                "WEBHOOK_SECRET must be set when WEBHOOK_BASE_URL is configured. "
+                "Generate a random 32+ char value (A-Za-z0-9_- only) so Telegram "
+                "can authenticate to /webhook via the secret-token header."
+            )
+        webhook_url = f"{webhook_base_url.rstrip('/')}/webhook"
         await _application.bot.set_webhook(
             url=webhook_url,
+            secret_token=webhook_secret,
             allowed_updates=["message", "callback_query"],
             drop_pending_updates=True,
         )
-        masked = token[:8] + "..." if len(token) > 8 else "***"
-        logger.info("Webhook registered at %s/webhook/%s", webhook_base_url.rstrip("/"), masked)
+        logger.info("Webhook registered at %s/webhook", webhook_base_url.rstrip("/"))
     else:
         logger.info(
             "WEBHOOK_BASE_URL not set — bot is in webhook-only mode "

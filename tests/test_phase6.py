@@ -289,20 +289,26 @@ async def test_non_admin_callback_is_silently_ignored(singleton_user):
 
 
 async def test_webhook_wrong_token_returns_403(client):
-    resp = await client.post("/webhook/wrong-token", json={"update_id": 1})
+    # Authentication now happens via the X-Telegram-Bot-Api-Secret-Token
+    # header, not a token in the URL path. A wrong/missing secret is 403.
+    resp = await client.post(
+        "/webhook",
+        json={"update_id": 1},
+        headers={"X-Telegram-Bot-Api-Secret-Token": "wrong-token"},
+    )
     assert resp.status_code == 403
 
 
 async def test_webhook_correct_token_dispatches_update(client):
-    """A POST with the correct token is accepted and process_update is called.
+    """A POST with the correct secret header is accepted and process_update runs.
 
-    The ``client`` fixture sets TELEGRAM_BOT_TOKEN to the value below, so
-    that is the token FastAPI's DI resolves from get_settings().
+    The ``client`` fixture sets WEBHOOK_SECRET to the value below, so that is
+    the secret FastAPI's DI resolves from get_settings().
     """
     from app.bot import setup as bot_setup
 
-    # Must match the token set by the ``client`` fixture in conftest
-    TEST_TOKEN = "1234567890:test-token-for-testing-only"
+    # Must match the secret set by the ``client`` fixture in conftest
+    TEST_SECRET = "test-webhook-secret"
 
     mock_app = MagicMock()
     mock_app.bot = MagicMock()
@@ -313,7 +319,11 @@ async def test_webhook_correct_token_dispatches_update(client):
         patch("app.api.webhook.Update") as mock_update_cls,
     ):
         mock_update_cls.de_json = MagicMock(return_value=MagicMock())
-        resp = await client.post(f"/webhook/{TEST_TOKEN}", json={"update_id": 42})
+        resp = await client.post(
+            "/webhook",
+            json={"update_id": 42},
+            headers={"X-Telegram-Bot-Api-Secret-Token": TEST_SECRET},
+        )
 
     assert resp.status_code == 200
     assert resp.json() == {"ok": True}
