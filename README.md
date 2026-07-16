@@ -109,7 +109,7 @@ curl -X POST https://your-server.com/api/v1/track \
     "session_id": "uuid-here",
     "properties": {
       "role": "creator",
-      "interest_set": ["vertical_to_horizontal", "unsure"]
+      "interest": ["vertical_to_horizontal", "unsure"]
     }
   }'
 ```
@@ -119,14 +119,18 @@ Nested objects, nested arrays, and `undefined` are rejected with **422**.
 
 #### Sort behaviour
 
-The server applies **write-time sorting** to arrays whose key ends in
-`_set` (e.g. `interest_set`, `feature_flags_set`). This makes the "most
-common combos" query a trivial `GROUP BY` — `["a","b"]` and `["b","a"]`
-collapse into one bucket without read-time normalisation. Mixed-type
-arrays (e.g. `[1, "a"]`) cannot be compared and are stored as-sent.
+The server **sorts every array property at write time**. There's no
+naming convention to remember — `interest`, `tags`, `flags`, anything
+goes — so `["a", "b"]` and `["b", "a"]` collapse to the same JSONB
+value and the "most common combos" query is a trivial `GROUP BY`
+without read-time normalisation. Mixed-type arrays (e.g. `[1, "a"]`)
+can't be `<`-compared in Python; those fall back to insertion order
+instead of failing the request.
 
-Other array properties keep insertion order, which matters for
-ordered-list semantics like `recent_searches`.
+> **Order-sensitive use cases.** Because every array is sorted, a list
+> like `recent_searches: ["pizza", "pasta"]` loses its original order
+> on the wire. If insertion order matters, serialize to a string
+> (`"pizza,pasta"`) or use an object shape with positional keys.
 
 #### Canonical dashboard queries
 
@@ -138,13 +142,13 @@ complementary dashboards:
 --    interest is selected):
 SELECT elem, count(*) AS n
 FROM events,
-     jsonb_array_elements_text(properties->'interest_set') AS elem
+     jsonb_array_elements_text(properties->'interest') AS elem
 WHERE event_name = 'onboarding_completed'
 GROUP BY elem
 ORDER BY n DESC;
 
 -- 2. Most common combinations of selected values:
-SELECT properties->'interest_set' AS combo, count(*) AS n
+SELECT properties->'interest' AS combo, count(*) AS n
 FROM events
 WHERE event_name = 'onboarding_completed'
 GROUP BY combo
@@ -159,7 +163,7 @@ No schema migration is needed — Postgres `JSONB` stores arrays natively.
 One `proj_` API key handles both: embed it in your frontend **and** use it from
 your backend — events land in the same project.
 
-The **domain allowlist** (set via `/settings`) is a browser-only guard against
+The **domain allowlist** (set per project via `/projects` → **Settings**) is a browser-only guard against
 abuse of the public key embedded in your JS bundle. It works like this:
 
 | Caller | `Origin` header | Behavior |
@@ -179,12 +183,48 @@ An empty allowlist allows all origins.
 
 | Command | Description |
 |---|---|
-| `/start` | Greet the bot and see available commands |
+| `/start` | Home menu (first run shows a guided welcome) |
 | `/add <name>` | Create a new project and get its API key |
 | `/projects` | List all projects |
-| `/report <event>` | Get a chart for an event (with period/granularity controls) |
-| `/settings` | Configure retention and domain allowlist |
+| `/events` | Browse event types for a project |
+| `/report [event]` | Get a chart for an event (with period/granularity controls) |
+| `/digest` | Last-7-days recap: sessions and alerted-event counts with week-over-week deltas, per project |
+| `/overview` | Multi-line visits chart across all projects |
+| `/alerts` | List active alerts across all projects |
+| `/doctor` | Health check across all projects (silent projects, open allowlists) |
+| `/mcp` | Setup instructions for connecting an AI agent (MCP) |
+| `/mcp_token` | Manage static MCP access tokens (`/mcp_token new [label]` to create) |
 | `/help` | Show this command reference |
+| `/cancel` | Cancel the current multi-step operation |
+
+Project settings (retention, domain allowlist, API-key rotation) have no
+slash command — open `/projects`, pick a project, and use its **Settings**
+menu.
+
+---
+
+## Connect Claude (MCP)
+
+The server exposes an MCP endpoint at `/mcp` so Claude Code, Claude
+Desktop, Cursor, and other MCP clients can query your analytics and
+help you integrate the SDKs.
+
+1. In Telegram, send `/mcp_token new claude` to your bot. Copy the
+   `mcp_...` token — it is shown only once.
+2. Add the server to Claude Code:
+
+   ```bash
+   claude mcp add --transport http tgram https://your-server.example.com/mcp \
+     --header "Authorization: Bearer mcp_..."
+   ```
+
+Claude Desktop is supported via Settings → Connectors → Add custom
+connector (paste an `/mcp_token` token in the browser page that opens).
+
+Revoke tokens anytime with `/mcp_token`. Set `MCP_ENABLED=false` to
+remove the endpoint entirely. `MCP_PUBLIC_URL` overrides the base URL
+used in metadata and CORS/Host allow-lists (defaults to
+`WEBHOOK_BASE_URL`).
 
 ---
 
@@ -202,7 +242,7 @@ cp .env.example .env   # edit values
 ### Run locally (with Docker DB)
 
 ```bash
-make dev-db          # start postgres + quickchart in Docker
+make dev-db          # start postgres in Docker
 make migrate         # apply migrations
 uvicorn app.main:app --reload
 ```
@@ -304,13 +344,16 @@ See [PROJECT.md](../PROJECT.md) for full architecture documentation.
 
 ## Extension points
 
-The server exposes a small, stable set of hooks in [`app/extensions.py`](app/extensions.py) that downstream packages may use to customize behavior without forking. Three registries are available:
+The server exposes a small, stable set of hooks in [`app/extensions.py`](app/extensions.py) that downstream packages may use to customize behavior without forking. Six registries are available:
 
 | Hook | Purpose | Cardinality |
 |---|---|---|
 | `register_user_resolver(callable)` | Replace the default singleton User resolver | one (raises if registered twice) |
 | `register_project_pre_create(callable)` | Append a pre-flush quota/policy check | many (run in registration order) |
 | `register_bot_filter(filter)` | Append a bot-handler filter, AND-combined with the admin chat gate | many |
+| `register_http_router(prefix, router_or_app, lifespan=None)` | Mount a FastAPI `APIRouter` (or any ASGI app) at startup, with an optional lifespan composed into the main app's | many |
+| `register_mcp_token_verifier(verifier)` | Replace the default static MCP bearer-token verifier (backed by the `mcp_tokens` table) | one (raises if registered twice) |
+| `register_mcp_whoami_extra(callable)` | Append a hook that contributes extra fields to the `whoami` MCP tool output (merged last-write-wins) | many (run in registration order) |
 
 A plugin is any Python module that calls one or more of these from a top-level `register()` function. Plugins are discovered at server startup via two mechanisms (in this order):
 
@@ -402,5 +445,5 @@ In plain language:
 
 See the [FSL FAQ](https://fsl.software/) for details.
 
-The client SDKs (`tgram-analytics-js`, `-py`, `-dart`) remain under MIT so you
+The client SDKs (`tgram-analytics-js`, `-py`, `-flutter`) remain under MIT so you
 can ship them with any project.

@@ -1,5 +1,7 @@
 """Application configuration loaded from environment variables."""
 
+import re
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -32,8 +34,34 @@ class Settings(BaseSettings):
     # ── Bot webhook ───────────────────────────────────────────────────────
     webhook_base_url: str = ""
 
+    # Random shared secret echoed by Telegram in the
+    # X-Telegram-Bot-Api-Secret-Token header. Set via set_webhook(secret_token=...).
+    # Keeps the bot token out of the request path (and therefore out of logs).
+    # Telegram constrains this value: 1-256 chars, only A-Z a-z 0-9 _ - allowed.
+    webhook_secret: str = ""
+
     # ── Rate limiting ─────────────────────────────────────────────────────
     rate_limit_per_second: int = 100
+
+    # Two-tier per-IP throttle for ingestion, both applied before the API-key
+    # lookup so an attacker can't force an un-throttled DB SELECT per request.
+    #
+    # Tier 1 — coarse valve: a per-IP ceiling on ALL ingestion traffic, set far
+    # above any plausible legitimate single-IP rate. It only bounds worst-case
+    # DB load; it must never throttle a valid server-side SDK or NAT/proxy pool.
+    ingest_ip_rate_limit_per_second: int = 1000
+
+    # Tier 2 — invalid-key penalty: the real anti-flood control. Counts only
+    # requests whose API key fails validation. Once an IP is over budget the
+    # request is rejected BEFORE the DB lookup, so bad-key floods stop hitting
+    # the DB. Valid keys never touch this budget.
+    invalid_key_rate_limit_per_second: int = 10
+
+    # ── Request-body size limit ───────────────────────────────────────────
+    # Hard cap (bytes) on request bodies. Enforced by an ASGI middleware via
+    # the Content-Length header before the body is read, so oversized payloads
+    # are rejected with 413 without ever being materialized in RAM.
+    max_request_body_bytes: int = 1_048_576  # 1 MB
 
     # ── Retention cap ─────────────────────────────────────────────────────
     # Hard ceiling on ``ProjectSettings.retention_days`` for user-driven
@@ -80,6 +108,41 @@ class Settings(BaseSettings):
     # unset and fall back to in-process state.
     redis_url: str | None = None
 
+    # ── MCP server ────────────────────────────────────────────────────────
+    # The MCP surface is mounted at /mcp when enabled. On a fresh install
+    # it is inert until an access token is created via /mcp_token — every
+    # request 401s with no token rows in the DB.
+    mcp_enabled: bool = True
+    # Externally-reachable base URL for the MCP server. Used for the
+    # OAuth-style issuer/resource metadata and Origin/Host allow-lists.
+    # Empty ⇒ fall back to webhook_base_url, then http://localhost:8000.
+    mcp_public_url: str = ""
+    # Extra allowed browser Origins for the MCP endpoint (DNS-rebinding
+    # protection). The effective public URL is always included.
+    mcp_allowed_origins: list[str] = []
+    # Optional GitHub token to raise the raw.githubusercontent.com rate
+    # limit for the docs-federation fetcher (60/hr anon → 5000/hr).
+    mcp_github_token: str | None = None
+    # Browser OAuth for MCP clients that cannot send custom headers
+    # (Claude Desktop). Self-host only: mounted when the default
+    # StaticTokenVerifier is in use; a plugin-registered verifier
+    # (cloud overlay) supplies its own OAuth and this flag is inert.
+    mcp_oauth_enabled: bool = True
+
+    @property
+    def mcp_effective_public_url(self) -> str:
+        """Resolved public base URL for MCP metadata and allow-lists."""
+        return (
+            self.mcp_public_url.rstrip("/")
+            or self.webhook_base_url.rstrip("/")
+            or "http://localhost:8000"
+        )
+
+    @property
+    def mcp_canonical_resource_uri(self) -> str:
+        """RFC 8707 canonical resource URI advertised to MCP clients."""
+        return f"{self.mcp_effective_public_url}/mcp"
+
     @field_validator("telegram_bot_token")
     @classmethod
     def token_must_not_be_empty(cls, v: str) -> str:
@@ -92,6 +155,20 @@ class Settings(BaseSettings):
     def database_url_must_not_be_empty(cls, v: str) -> str:
         if not v.strip():
             raise ValueError("DATABASE_URL must not be empty")
+        return v
+
+    @field_validator("webhook_secret")
+    @classmethod
+    def webhook_secret_must_match_telegram_charset(cls, v: str) -> str:
+        # Empty is allowed (long-polling deployments never set it; the route is
+        # fail-closed and init_bot raises when WEBHOOK_BASE_URL is set). When
+        # provided, Telegram accepts only 1-256 chars from A-Z a-z 0-9 _ - so
+        # reject anything else early rather than failing at set_webhook time.
+        if v and not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", v):
+            raise ValueError(
+                "WEBHOOK_SECRET may contain only A-Za-z0-9_- characters "
+                "(1-256 chars), per Telegram's secret_token constraint"
+            )
         return v
 
 

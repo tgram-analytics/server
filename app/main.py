@@ -47,10 +47,44 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 app.mount(prefix, router_or_app)
             if child_lifespan is not None:
                 await stack.enter_async_context(child_lifespan(app))
+        # Mount the MCP surface unless disabled. A plugin may have mounted
+        # its own ASGI app at /mcp (pre-hook-era cloud overlays did); in
+        # that case skip ours so the two don't stack.
+        plugin_owns_mcp = any(
+            prefix == "/mcp" and not isinstance(router_or_app, APIRouter)
+            for prefix, router_or_app, _ in get_registered_http_routers()
+        )
+        if settings.mcp_enabled and not plugin_owns_mcp:
+            from app.extensions import get_mcp_token_verifier
+            from app.mcp.auth import StaticTokenVerifier
+            from app.mcp.router import build_health_router
+            from app.mcp.server import build_mcp_asgi_app
+
+            verifier = get_mcp_token_verifier() or StaticTokenVerifier()
+            app.include_router(build_health_router(), prefix="/mcp")
+            # Self-host OAuth for header-less MCP clients (Claude Desktop).
+            # Registered BEFORE the /mcp ASGI mount: Starlette matches routes
+            # in insertion order, so the /mcp/oauth/* routes must precede the
+            # catch-all mount or requests fall through to the FastMCP app and
+            # 404 — the same reason the /mcp health router is included first.
+            # Only when the DEFAULT verifier is in use: a plugin-registered
+            # verifier (cloud overlay) brings its own OAuth and well-known.
+            if settings.mcp_oauth_enabled and get_mcp_token_verifier() is None:
+                from app.mcp.oauth.router import build_oauth_router
+                from app.mcp.well_known import build_well_known_router
+
+                app.include_router(build_oauth_router(), prefix="/mcp/oauth")
+                app.include_router(
+                    build_well_known_router(public_url=settings.mcp_effective_public_url)
+                )
+            mcp_asgi_app, mcp_lifespan = build_mcp_asgi_app(settings, token_verifier=verifier)
+            app.mount("/mcp", mcp_asgi_app)
+            await stack.enter_async_context(mcp_lifespan(app))
         await init_bot(
             token=settings.telegram_bot_token,
             admin_chat_id=settings.admin_chat_id,
             webhook_base_url=settings.webhook_base_url,
+            webhook_secret=settings.webhook_secret,
         )
         yield
         await shutdown_bot()
@@ -97,6 +131,59 @@ def create_app() -> FastAPI:
         allow_headers=["Content-Type"],
         max_age=600,
     )
+
+    # Reject oversized request bodies by Content-Length BEFORE the body is
+    # read/parsed, so a huge payload can never be materialized in RAM. Pure
+    # ASGI middleware — runs ahead of routing and body consumption.
+    from starlette.types import ASGIApp, Receive, Scope, Send
+
+    _max_body = get_settings().max_request_body_bytes
+
+    class BodySizeLimitMiddleware:
+        def __init__(self, app: ASGIApp) -> None:
+            self.app = app
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            if scope["type"] == "http":
+                for name, value in scope.get("headers", []):
+                    if name == b"content-length" and value.isdigit() and int(value) > _max_body:
+                        await send(
+                            {
+                                "type": "http.response.start",
+                                "status": 413,
+                                "headers": [(b"content-type", b"application/json")],
+                            }
+                        )
+                        await send(
+                            {
+                                "type": "http.response.body",
+                                "body": b'{"detail":"Request body too large"}',
+                            }
+                        )
+                        return
+            await self.app(scope, receive, send)
+
+    app.add_middleware(BodySizeLimitMiddleware)
+
+    # Serve bare /mcp in place instead of 307-redirecting to /mcp/. The MCP
+    # surface is a Starlette Mount("/mcp", ...), whose compiled pattern only
+    # matches "/mcp/..." — a request to exactly "/mcp" falls through to the
+    # router's redirect_slashes 307. The protected-resource metadata
+    # advertises the RFC 8707 resource URI without a trailing slash, so MCP
+    # clients POST the bare path, and httpx-based SDK clients never follow
+    # redirects on POST: the redirect reads as "server not found". Pure ASGI
+    # (not BaseHTTPMiddleware) because the MCP app streams SSE responses.
+    class MCPPathRewriteMiddleware:
+        def __init__(self, app: ASGIApp) -> None:
+            self.app = app
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            if scope["type"] == "http" and scope.get("path") == "/mcp":
+                scope["path"] = "/mcp/"
+                scope["raw_path"] = b"/mcp/"
+            await self.app(scope, receive, send)
+
+    app.add_middleware(MCPPathRewriteMiddleware)
 
     app.include_router(health_router)
     app.include_router(projects_router)

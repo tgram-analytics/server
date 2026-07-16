@@ -14,6 +14,8 @@ Public surface (stable):
 * :func:`register_user_resolver` — replace the default resolver
 * :func:`register_project_pre_create` — append a pre-flush quota/policy hook
 * :func:`register_bot_filter` — append a bot-handler filter (AND-combined)
+* :func:`register_mcp_token_verifier` — replace the default MCP token verifier
+* :func:`register_mcp_whoami_extra` — append a whoami-output contributor
 * :class:`ExtensionError` — base class for extension-raised errors that
   should be rendered to the end user (Telegram message / API response)
   instead of being treated as a server bug
@@ -97,6 +99,8 @@ _user_resolver: UserResolver | None = None
 _project_pre_create: list[ProjectPreCreate] = []
 _bot_filters: list[ptb_filters.BaseFilter] = []
 _http_routers: list[tuple[str, Any, Callable[[Any], AbstractAsyncContextManager[None]] | None]] = []
+_mcp_token_verifier: Any | None = None
+_mcp_whoami_extras: list[Callable[..., Awaitable[dict[str, Any]]]] = []
 
 
 def register_user_resolver(resolver: UserResolver) -> None:
@@ -150,6 +154,45 @@ def register_http_router(
     _http_routers.append((prefix, router_or_app, lifespan))
 
 
+def register_mcp_token_verifier(verifier: Any) -> None:
+    """Replace the default MCP bearer-token verifier.
+
+    *verifier* must implement ``mcp.server.auth.provider.TokenVerifier``
+    (typed as ``Any`` here to keep the ``mcp`` SDK out of the OSS import
+    graph until the MCP app is actually built). The default when no
+    verifier is registered is the static-token verifier backed by the
+    ``mcp_tokens`` table. Raises ``RuntimeError`` on double registration —
+    there can be only one verification strategy.
+    """
+    global _mcp_token_verifier
+    if _mcp_token_verifier is not None:
+        raise RuntimeError("MCP token verifier already registered")
+    _mcp_token_verifier = verifier
+
+
+def register_mcp_whoami_extra(
+    fn: Callable[..., Awaitable[dict[str, Any]]],
+) -> None:
+    """Add a hook that contributes extra fields to the ``whoami`` MCP tool.
+
+    Signature: ``async fn(session: AsyncSession, user: User) -> dict``.
+    Hooks run in registration order; results are merged last-write-wins
+    onto the base whoami payload. Hooks must not raise for missing data —
+    return ``{}`` instead.
+    """
+    _mcp_whoami_extras.append(fn)
+
+
+def get_mcp_token_verifier() -> Any | None:
+    """Return the registered MCP token verifier, or ``None`` for the default."""
+    return _mcp_token_verifier
+
+
+def get_mcp_whoami_extras() -> tuple[Callable[..., Awaitable[dict[str, Any]]], ...]:
+    """Return registered whoami-extra hooks in registration order."""
+    return tuple(_mcp_whoami_extras)
+
+
 def get_user_resolver() -> UserResolver | None:
     """Return the registered user resolver, or ``None`` for the default."""
     return _user_resolver
@@ -177,8 +220,10 @@ def _reset_for_tests() -> None:
 
     Not part of the stable surface; the leading underscore is the contract.
     """
-    global _user_resolver
+    global _user_resolver, _mcp_token_verifier
     _user_resolver = None
     _project_pre_create.clear()
     _bot_filters.clear()
     _http_routers.clear()
+    _mcp_token_verifier = None
+    _mcp_whoami_extras.clear()

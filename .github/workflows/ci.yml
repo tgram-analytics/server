@@ -32,6 +32,14 @@ jobs:
         run: mypy app
 
       - name: Check OpenAPI spec is up to date
+        # Importing the routers pulls in Settings at import time
+        # (app/api/ingestion.py reads the throttle knobs), so the exporter
+        # needs the same placeholder config the test job uses.
+        env:
+          TELEGRAM_BOT_TOKEN: "1234567890:test-token-for-testing-only"
+          ADMIN_CHAT_ID: "123456789"
+          DATABASE_URL: "postgresql+asyncpg://tga:testpassword@localhost/tganalytics_test"
+          SECRET_KEY: "ci-secret-key-not-for-production"
         run: python scripts/export_openapi.py --check
 
   test:

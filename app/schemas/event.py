@@ -13,14 +13,13 @@ _MAX_PAST = timedelta(days=365)
 # Cap number of entries in properties dict to prevent resource exhaustion.
 _MAX_PROPERTIES = 100
 
+# Max length of a single scalar string property value (8 KB). Caps memory a
+# single event can force the server to materialize from one property.
+_MAX_VALUE_LEN = 8192
+
 # A property value is one of these scalars, or a list of them. ``bool`` is a
 # subclass of ``int`` in Python — isinstance check just works.
 _ScalarTypes = (str, int, float, bool, type(None))
-
-# Properties whose key ends in this suffix get sorted alphabetically /
-# numerically at write time, so combo queries (GROUP BY properties->'foo')
-# collapse equivalent sets without an extra normalisation step.
-_SET_SUFFIX = "_set"
 
 
 def _validate_timestamp(v: datetime | None) -> datetime | None:
@@ -46,15 +45,26 @@ def _is_scalar(v: Any) -> bool:
 
 
 def _validate_property_value(key: str, value: Any) -> Any:
-    """Return *value* unchanged when it's a scalar; validate-and-maybe-sort
-    when it's a list of scalars; raise ``ValueError`` otherwise.
+    """Return *value* unchanged when it's a scalar; validate-and-sort when
+    it's a list of scalars; raise ``ValueError`` otherwise.
 
-    For keys ending in ``_set``, homogeneous lists are sorted in-place so
-    that ``["b", "a"]`` and ``["a", "b"]`` collapse to the same JSONB
-    representation. Heterogeneous lists (e.g. mixing str and int) are left
-    untouched because ``<`` is not defined across those types in Python 3.
+    Lists are sorted at write time so that ``["b", "a"]`` and ``["a", "b"]``
+    collapse to the same JSONB representation — that makes combo queries
+    (``GROUP BY properties->'foo'``) trivial without read-time normalisation,
+    and the unnest / per-element query (``jsonb_array_elements_text``) is
+    unaffected by element order either way. Heterogeneous lists (e.g.
+    mixing ``str`` and ``int``) can't be compared with ``<`` in Python 3,
+    so we fall back to insertion order rather than 400 on a payload we can
+    technically store.
+
+    Order-sensitive use cases (e.g. a navigation path) should serialize the
+    list to a string (``"home,products,checkout"``) or use an object shape
+    with positional keys — the analytics column is JSONB, not an ordered
+    list type, and the sort-on-write rule applies uniformly.
     """
     if _is_scalar(value):
+        if isinstance(value, str) and len(value) > _MAX_VALUE_LEN:
+            raise ValueError(f"properties[{key!r}] string value exceeds {_MAX_VALUE_LEN} chars")
         return value
 
     if isinstance(value, list):
@@ -67,14 +77,16 @@ def _validate_property_value(key: str, value: Any) -> Any:
                     "Arrays may only contain scalar primitives — "
                     "objects, nested arrays, and undefined are not allowed."
                 )
-        if key.endswith(_SET_SUFFIX):
-            try:
-                return sorted(value)
-            except TypeError:
-                # Heterogeneous element types — leave caller's order intact
-                # rather than 400-ing on something we can technically store.
-                return value
-        return value
+            if isinstance(item, str) and len(item) > _MAX_VALUE_LEN:
+                raise ValueError(
+                    f"properties[{key!r}][{i}] string value exceeds {_MAX_VALUE_LEN} chars"
+                )
+        try:
+            return sorted(value)
+        except TypeError:
+            # Heterogeneous element types — leave caller's order intact
+            # rather than 400-ing on something we can technically store.
+            return value
 
     raise ValueError(
         f"properties[{key!r}] must be a scalar "

@@ -114,7 +114,7 @@ async def funnel_callback(
 
     if data.startswith("fnl_add:"):
         project_id_str = data[8:]
-        await _start_add_funnel(query, project_id_str)
+        await _start_add_funnel(query, project_id_str, owner_user_id)
 
     elif data.startswith("fnl_evt:"):
         event_name = data[8:]
@@ -145,15 +145,25 @@ async def funnel_callback(
 # ── Creation flow ────────────────────────────────────────────────────────────
 
 
-async def _start_add_funnel(query: CallbackQuery, project_id_str: str) -> None:
+async def _start_add_funnel(
+    query: CallbackQuery, project_id_str: str, owner_user_id: uuid.UUID
+) -> None:
     """Step 1: show the event picker directly — no name input required."""
     assert isinstance(query.message, Message)
     chat_id = query.message.chat_id
 
-    pid = uuid.UUID(project_id_str)
+    try:
+        pid = uuid.UUID(project_id_str)
+    except ValueError:
+        await query.edit_message_text("❌ Invalid project reference.")
+        return
 
     factory = get_session_factory()
     async with factory() as session:
+        if await get_project(session, pid, owner_user_id) is None:
+            await query.edit_message_text("❌ Project not found.")
+            return
+
         events = await list_event_names(session, project_id=pid)
 
         if not events:
@@ -177,7 +187,11 @@ async def _start_add_funnel(query: CallbackQuery, project_id_str: str) -> None:
             chat_id,
             flow="add_funnel",
             step="events",
-            payload={"project_id": project_id_str, "events": []},
+            payload={
+                "project_id": project_id_str,
+                "events": [],
+                "owner_user_id": str(owner_user_id),
+            },
         )
         await session.commit()
 
@@ -328,8 +342,15 @@ async def _pick_time_window(
             await query.edit_message_text("❌ Invalid state. Please start again.")
             return
 
-        funnel_name = " → ".join(steps)
         pid = uuid.UUID(project_id_str)
+        owner_raw = payload.get("owner_user_id")
+        if owner_raw and await get_project(session, pid, uuid.UUID(owner_raw)) is None:
+            await svc.clear(chat_id)
+            await session.commit()
+            await query.edit_message_text("❌ Project not found.")
+            return
+
+        funnel_name = " → ".join(steps)
         funnel = await create_funnel(
             session,
             project_id=pid,

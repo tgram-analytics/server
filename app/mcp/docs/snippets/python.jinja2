@@ -1,0 +1,7 @@
+# Install: pip install {{ package_name }}
+from {{ package_name.replace('-', '_') }} import TGA
+
+tga = TGA(api_key='{{ api_key }}', server_url='{{ server_url }}')
+
+# Track an event (session_id is required server-side)
+tga.track(session_id='user-123', event_name='signup', properties={'plan': 'free'})
