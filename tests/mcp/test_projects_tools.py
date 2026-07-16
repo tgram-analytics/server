@@ -181,7 +181,7 @@ async def test_list_event_names_happy_path(
         AsyncMock(return_value=project),
     )
     rows = [
-        {"event_name": "page_view", "count": 100, "last_seen": datetime(2026, 1, 1, tzinfo=UTC)},
+        {"event_name": "pageview", "count": 100, "last_seen": datetime(2026, 1, 1, tzinfo=UTC)},
         {"event_name": "signup", "count": 5, "last_seen": None},
     ]
     monkeypatch.setattr(
@@ -196,7 +196,7 @@ async def test_list_event_names_happy_path(
 
     assert isinstance(result, dict)
     assert len(result["events"]) == 2
-    assert result["events"][0]["event_name"] == "page_view"
+    assert result["events"][0]["event_name"] == "pageview"
     assert result["events"][0]["count"] == 100
     assert result["events"][0]["last_seen"] == "2026-01-01T00:00:00+00:00"
     assert result["events"][1]["last_seen"] is None

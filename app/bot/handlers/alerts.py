@@ -222,7 +222,7 @@ async def _start_add_alert(
     await query.edit_message_text(
         "📝 <b>Add Alert</b>\n\n"
         "Type the event name you want to monitor:\n\n"
-        "<i>Example: signup, purchase, page_view</i>",
+        "<i>Example: signup, purchase, pageview</i>",
         parse_mode="HTML",
     )
 

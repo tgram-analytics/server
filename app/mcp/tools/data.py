@@ -7,7 +7,7 @@ Four handlers, all project-scoped (every one calls
   period.
 - ``compare_periods`` — current-period count vs. immediately-prior period
   + percent delta.
-- ``top_pages`` — top URLs from ``page_view`` events.
+- ``top_pages`` — top URLs from ``pageview`` events.
 - ``recent_events`` — most-recent N events (newest first).
 """
 
@@ -217,7 +217,7 @@ def register_data_tools(mcp: FastMCP) -> None:
         period: str = "7d",
         limit: int = 10,
     ) -> list[TextContent] | TopPagesResult:
-        """Return the top URLs from ``page_view`` events in *period*.
+        """Return the top URLs from ``pageview`` events in *period*.
 
         Response: ``{"pages": [{"value": url, "count": int}, ...]}``.
         """
@@ -251,7 +251,7 @@ def register_data_tools(mcp: FastMCP) -> None:
             rows = await top_properties(
                 session,
                 project_id=pid,
-                event_name="page_view",
+                event_name="pageview",
                 property_key="url",
                 start=start,
                 end=end,

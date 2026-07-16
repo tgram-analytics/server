@@ -100,10 +100,10 @@ async def test_verify_integration_with_events(
     )
     now = datetime.now(UTC)
     rows = [
-        {"event_name": "page_view", "timestamp": now - timedelta(minutes=5)},
-        {"event_name": "page_view", "timestamp": now - timedelta(minutes=2)},
+        {"event_name": "pageview", "timestamp": now - timedelta(minutes=5)},
+        {"event_name": "pageview", "timestamp": now - timedelta(minutes=2)},
         # Outside the 30-min window:
-        {"event_name": "page_view", "timestamp": now - timedelta(hours=2)},
+        {"event_name": "pageview", "timestamp": now - timedelta(hours=2)},
     ]
     monkeypatch.setattr(
         "app.services.analytics.list_recent_events",

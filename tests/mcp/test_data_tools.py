@@ -41,7 +41,7 @@ async def test_query_events_no_token(fresh_mcp, call_tool, set_auth_token, proje
             fresh_mcp,
             "query_events",
             project_id=str(project_a_id),
-            event_name="page_view",
+            event_name="pageview",
         )
     assert isinstance(result, list)
     assert result[0].isError is True
@@ -57,7 +57,7 @@ async def test_query_events_invalid_period(
             fresh_mcp,
             "query_events",
             project_id=str(project_a_id),
-            event_name="page_view",
+            event_name="pageview",
             period="bogus",
         )
     assert isinstance(result, list)
@@ -75,7 +75,7 @@ async def test_query_events_invalid_granularity(
             fresh_mcp,
             "query_events",
             project_id=str(project_a_id),
-            event_name="page_view",
+            event_name="pageview",
             granularity="century",
         )
     assert isinstance(result, list)
@@ -115,7 +115,7 @@ async def test_query_events_happy_path(
             fresh_mcp,
             "query_events",
             project_id=str(project_a_id),
-            event_name="page_view",
+            event_name="pageview",
             period="7d",
             granularity="day",
         )
@@ -154,7 +154,7 @@ async def test_query_events_cross_user_403(
             fresh_mcp,
             "query_events",
             project_id=str(project_a_id),
-            event_name="page_view",
+            event_name="pageview",
         )
 
     assert isinstance(result, list)
@@ -190,7 +190,7 @@ async def test_compare_periods_happy_path(
             fresh_mcp,
             "compare_periods",
             project_id=str(project_a_id),
-            event_name="page_view",
+            event_name="pageview",
             period="30d",
         )
 
@@ -231,7 +231,7 @@ async def test_compare_periods_cross_user_403(
             fresh_mcp,
             "compare_periods",
             project_id=str(project_a_id),
-            event_name="page_view",
+            event_name="pageview",
         )
     assert isinstance(result, list)
     assert result[0].isError is True
@@ -276,9 +276,9 @@ async def test_top_pages_happy_path(
     assert isinstance(result, dict)
     assert result["pages"] == rows
     assert result["period"] == "7d"
-    # Verify the service was called for page_view + url.
+    # Verify the service was called for pageview + url.
     kwargs = top_mock.await_args.kwargs
-    assert kwargs["event_name"] == "page_view"
+    assert kwargs["event_name"] == "pageview"
     assert kwargs["property_key"] == "url"
     assert kwargs["limit"] == 5
 
@@ -344,7 +344,7 @@ async def test_recent_events_happy_path(
     )
     ts = datetime(2026, 5, 8, tzinfo=UTC)
     rows = [
-        {"event_name": "page_view", "timestamp": ts},
+        {"event_name": "pageview", "timestamp": ts},
         {"event_name": "signup", "timestamp": ts},
     ]
     monkeypatch.setattr(
@@ -364,7 +364,7 @@ async def test_recent_events_happy_path(
 
     assert isinstance(result, dict)
     assert len(result["events"]) == 2
-    assert result["events"][0]["event_name"] == "page_view"
+    assert result["events"][0]["event_name"] == "pageview"
     assert result["events"][0]["timestamp"] == ts.isoformat()
 
 
@@ -384,9 +384,9 @@ async def test_recent_events_filters_by_event_name(
     )
     ts = datetime(2026, 5, 8, tzinfo=UTC)
     rows = [
-        {"event_name": "page_view", "timestamp": ts},
+        {"event_name": "pageview", "timestamp": ts},
         {"event_name": "signup", "timestamp": ts},
-        {"event_name": "page_view", "timestamp": ts},
+        {"event_name": "pageview", "timestamp": ts},
     ]
     monkeypatch.setattr(
         "app.services.analytics.list_recent_events",
