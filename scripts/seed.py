@@ -35,9 +35,9 @@ except ImportError:
 # ── Realistic fake data ────────────────────────────────────────────────────────
 
 EVENT_NAMES = [
-    "page_view",
-    "page_view",
-    "page_view",  # weighted higher
+    "pageview",
+    "pageview",
+    "pageview",  # weighted higher
     "button_click",
     "button_click",
     "form_submit",
@@ -85,7 +85,7 @@ REFERRERS = [
 
 
 def _random_properties(event_name: str) -> dict:
-    if event_name == "page_view":
+    if event_name == "pageview":
         return {"url": random.choice(PAGES), "referrer": random.choice(REFERRERS)}
     if event_name == "button_click":
         return {"button_id": random.choice(BUTTONS), "page": random.choice(PAGES)}
