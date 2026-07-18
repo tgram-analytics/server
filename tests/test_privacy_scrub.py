@@ -48,6 +48,78 @@ def test_mixed_pii_and_clean_keys() -> None:
     assert oversized is False
 
 
+def test_segment_match_drops_compound_keys() -> None:
+    """Denylist terms match as whole segments inside compound keys."""
+    dropped_examples = {
+        "email": "x",
+        "Email": "x",
+        "user_email": "x",
+        "userEmail": "x",
+        "customer-email": "x",
+        "auth_token": "x",
+        "creditCard": "x",
+        "credit_card_number": "x",
+        "card_number": "x",
+        "stripe.token": "x",
+        "phone_model": "x",  # "phone" is a whole segment — err on dropping
+    }
+    scrubbed, dropped, oversized = scrub_properties(dict(dropped_examples))
+    assert scrubbed == {}
+    assert set(dropped) == set(dropped_examples)
+    assert oversized is False
+
+
+def test_segment_match_keeps_non_matching_keys() -> None:
+    """Substrings that are not whole segments do not trigger a drop."""
+    kept = {
+        "tokens_count": 3,  # "tokens" != "token"
+        "emailed": True,  # "emailed" != "email"
+        "tokenize": "yes",
+        "phones": 2,  # plural, single segment
+        "plan": "pro",
+        "amount": 42,
+    }
+    scrubbed, dropped, oversized = scrub_properties(dict(kept))
+    assert scrubbed == kept
+    assert dropped == []
+    assert oversized is False
+
+
+def test_multi_segment_denylist_term_matches_across_separators() -> None:
+    """ "credit_card" matches as contiguous segments regardless of separator style."""
+    scrubbed, dropped, _ = scrub_properties(
+        {
+            "creditCardNumber": "4242",
+            "credit-card": "4242",
+            "user_credit_card_last4": "4242",
+            "credit_score": 700,  # "credit" alone is not a denylist term
+        }
+    )
+    assert scrubbed == {"credit_score": 700}
+    assert set(dropped) == {"creditCardNumber", "credit-card", "user_credit_card_last4"}
+
+
+def test_mixed_separators_and_spaces() -> None:
+    scrubbed, dropped, _ = scrub_properties(
+        {"customer email": "x", "tax.id": "x", "card  number": "x", "safe key": 1}
+    )
+    assert scrubbed == {"safe key": 1}
+    assert set(dropped) == {"customer email", "tax.id", "card  number"}
+
+
+def test_dropped_keys_preserve_original_casing_compound() -> None:
+    _, dropped, _ = scrub_properties({"UserEmail": "x", "AUTH-TOKEN": "x"})
+    assert set(dropped) == {"UserEmail", "AUTH-TOKEN"}
+
+
+def test_non_string_keys_do_not_crash() -> None:
+    props = {1: "one", None: "none", 2.5: "float", "email": "x"}
+    scrubbed, dropped, oversized = scrub_properties(props)  # type: ignore[arg-type]
+    assert dropped == ["email"]
+    assert scrubbed == {1: "one", None: "none", 2.5: "float"}
+    assert oversized is False
+
+
 def test_caplog_emits_structured_warning_on_drop(caplog) -> None:
     project_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
     with caplog.at_level(logging.WARNING, logger="app.core.privacy"):
