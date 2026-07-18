@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import string
 import uuid
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import select
 
@@ -182,3 +183,104 @@ async def test_track_drops_oversized_properties_silently(api_client, db_session)
     )
     assert len(rows) == 1
     assert rows[0].properties == {}
+
+
+# ── Alert notifications must never see unscrubbed properties ───────────────
+#
+# The ingestion endpoints scrub PII-named keys before persisting, but the
+# alert-evaluation background task renders property keys/values into Telegram
+# messages that persist in chat history. It must receive the SAME scrubbed
+# dict that is stored — never the raw request properties.
+
+
+async def test_track_passes_scrubbed_properties_to_alert_evaluation(api_client):
+    """POST /track: the alert background task receives scrubbed properties."""
+    data = await _create_project(api_client, name="alert-scrub-track.com")
+    project_id = uuid.UUID(data["id"])
+
+    with patch("app.api.ingestion._run_alert_evaluation", new=AsyncMock()) as mock_eval:
+        resp = await api_client.post(
+            "/api/v1/track",
+            json={
+                "api_key": data["api_key"],
+                "event_name": "signup",
+                "session_id": str(uuid.uuid4()),
+                "properties": {"email": "leak@x.com", "password": "hunter2", "plan": "pro"},
+            },
+            headers={"User-Agent": _CHROME_DESKTOP_UA},
+        )
+        assert resp.status_code == 202, resp.text
+
+    mock_eval.assert_awaited_once()
+    args = mock_eval.await_args.args
+    assert args[0] == project_id
+    assert args[1] == "signup"
+    assert args[2] == {"plan": "pro"}
+
+
+async def test_pageview_passes_scrubbed_properties_to_alert_evaluation(api_client):
+    """POST /pageview: the alert background task receives scrubbed properties."""
+    data = await _create_project(api_client, name="alert-scrub-pv.com")
+    project_id = uuid.UUID(data["id"])
+
+    with patch("app.api.ingestion._run_alert_evaluation", new=AsyncMock()) as mock_eval:
+        resp = await api_client.post(
+            "/api/v1/pageview",
+            json={
+                "api_key": data["api_key"],
+                "session_id": str(uuid.uuid4()),
+                "url": "https://site.com/landing",
+                "properties": {"email": "leak@x.com", "plan": "pro"},
+            },
+            headers={"User-Agent": _CHROME_DESKTOP_UA},
+        )
+        assert resp.status_code == 202, resp.text
+
+    mock_eval.assert_awaited_once()
+    args = mock_eval.await_args.args
+    assert args[0] == project_id
+    assert args[1] == "pageview"
+    assert args[2] == {"plan": "pro", "url": "https://site.com/landing"}
+
+
+async def test_alert_notification_renders_no_pii(api_client, session_factory):
+    """End-to-end: a fired alert's Telegram message contains no PII values."""
+    from app.models.alert import AlertCondition
+    from app.services.alerts import create_alert
+
+    data = await _create_project(api_client, name="alert-scrub-notify.com")
+    project_id = uuid.UUID(data["id"])
+
+    async with session_factory() as session:
+        await create_alert(
+            session,
+            project_id=project_id,
+            event_name="signup",
+            condition=AlertCondition.every,
+        )
+        await session.commit()
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+
+    # ASGITransport runs BackgroundTasks before the request call returns, so
+    # the notification is sent (to the mocked bot) within this block.
+    with patch("app.bot.setup.get_bot", return_value=mock_bot):
+        resp = await api_client.post(
+            "/api/v1/track",
+            json={
+                "api_key": data["api_key"],
+                "event_name": "signup",
+                "session_id": str(uuid.uuid4()),
+                "properties": {"email": "leak@x.com", "plan": "pro"},
+            },
+            headers={"User-Agent": _CHROME_DESKTOP_UA},
+        )
+        assert resp.status_code == 202, resp.text
+
+    mock_bot.send_message.assert_awaited_once()
+    text = mock_bot.send_message.call_args.kwargs["text"]
+    assert "plan" in text
+    assert "pro" in text
+    assert "leak@x.com" not in text
+    assert "email" not in text.lower()
