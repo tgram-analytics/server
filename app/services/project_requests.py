@@ -150,7 +150,7 @@ async def claim_request(
         .values(status=status, project_id=project_id, resolved_at=resolved_at)
     )
     await session.flush()
-    if result.rowcount != 1:
+    if result.rowcount != 1:  # type: ignore[attr-defined]
         return False
 
     # Refresh the ORM object in place so callers can read the terminal
