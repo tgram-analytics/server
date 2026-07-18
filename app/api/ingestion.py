@@ -332,7 +332,10 @@ async def track(
     )
     await session.commit()
 
-    background_tasks.add_task(_run_alert_evaluation, project.id, body.event_name, body.properties)
+    # Privacy: alert notifications render property keys/values into Telegram
+    # messages, so they must see the same scrubbed dict that is persisted —
+    # never the raw request properties.
+    background_tasks.add_task(_run_alert_evaluation, project.id, body.event_name, scrubbed)
     return {"status": "accepted"}
 
 
@@ -384,5 +387,6 @@ async def pageview(
     )
     await session.commit()
 
-    background_tasks.add_task(_run_alert_evaluation, project.id, "pageview", properties)
+    # Privacy: same as /track — alerts must only ever see scrubbed properties.
+    background_tasks.add_task(_run_alert_evaluation, project.id, "pageview", scrubbed)
     return {"status": "accepted"}
