@@ -3,11 +3,12 @@
 Covers:
 
 - ``create_project``: auth boundary, input validation (name length,
-  allowlist size/entries), the pending-cap error path, and the happy
-  path (service dispatch + Telegram notification + result shape).
+  allowlist size/entries/normalization), the pending-cap error path,
+  and the happy path (service dispatch + Telegram notification +
+  result shape).
 - ``get_project_request_status``: auth boundary, UUID validation,
   not-found/ownership error, approved result shape, and the lazy
-  expiry path (``is_expired`` → ``resolve_request(status="expired")``).
+  expiry path (``is_expired`` → ``claim_request(status="expired")``).
 
 The ``app.services.project_requests`` service functions are mocked
 (the tools import them lazily inside the handler body, so patching the
@@ -92,6 +93,9 @@ class _FakeSession:
 
     async def commit(self):
         self.commit_count += 1
+
+    async def rollback(self):
+        pass
 
 
 @pytest.fixture
@@ -220,6 +224,66 @@ async def test_create_project_happy_path(
     assert request_session.commit_count == 1
 
 
+async def test_create_project_allowlist_is_normalized(
+    fresh_mcp, set_auth_token, monkeypatch, request_session, user_a_id
+):
+    """Entries are canonicalized to bare lowercase hosts before storage."""
+    row = _request_row(name="myapp")
+    create_mock = AsyncMock(return_value=row)
+    monkeypatch.setattr("app.services.project_requests.create_request", create_mock)
+    notify_mock = AsyncMock()
+    monkeypatch.setattr("app.mcp.notify.notify_project_request", notify_mock)
+
+    from tests.mcp.conftest import _make_token
+
+    with set_auth_token(_make_token(user_a_id)):
+        result = await _invoke(
+            fresh_mcp,
+            "create_project",
+            name="myapp",
+            domain_allowlist=["HTTPS://Example.com/path", "sub.Example.org"],
+        )
+
+    assert isinstance(result, dict)
+    assert result["status"] == "pending"
+
+    create_mock.assert_awaited_once()
+    assert create_mock.await_args.kwargs["domain_allowlist"] == [
+        "example.com",
+        "sub.example.org",
+    ]
+    # The notification shows the same normalized entries.
+    notify_mock.assert_awaited_once()
+    assert notify_mock.await_args.kwargs["domain_allowlist"] == [
+        "example.com",
+        "sub.example.org",
+    ]
+
+
+async def test_create_project_allowlist_all_junk_returns_error(
+    fresh_mcp, set_auth_token, monkeypatch, request_session, user_a_id
+):
+    """Non-blank entries that all normalize away are rejected up front."""
+    create_mock = AsyncMock()
+    monkeypatch.setattr("app.services.project_requests.create_request", create_mock)
+
+    from tests.mcp.conftest import _make_token
+
+    with set_auth_token(_make_token(user_a_id)):
+        result = await _invoke(
+            fresh_mcp,
+            "create_project",
+            name="myapp",
+            domain_allowlist=["*.", "https://"],
+        )
+
+    assert isinstance(result, list)
+    assert result[0].isError is True
+    assert "no valid domains" in result[0].text
+    create_mock.assert_not_awaited()
+    assert request_session.commit_count == 0
+
+
 async def test_create_project_pending_cap_returns_error(
     fresh_mcp, set_auth_token, monkeypatch, request_session, user_a_id
 ):
@@ -318,12 +382,13 @@ async def test_get_request_status_pending_expired_lazily_resolves(
         MagicMock(return_value=True),
     )
 
-    async def _resolve(_session, request, *, status, project_id=None):
+    async def _claim(_session, request, *, status, project_id=None):
         request.status = status
         request.project_id = project_id
+        return True
 
-    resolve_mock = AsyncMock(side_effect=_resolve)
-    monkeypatch.setattr("app.services.project_requests.resolve_request", resolve_mock)
+    claim_mock = AsyncMock(side_effect=_claim)
+    monkeypatch.setattr("app.services.project_requests.claim_request", claim_mock)
 
     from tests.mcp.conftest import _make_token
 
@@ -335,7 +400,7 @@ async def test_get_request_status_pending_expired_lazily_resolves(
     assert result["project_id"] is None
     assert "expired" in result["message"]
 
-    resolve_mock.assert_awaited_once()
-    assert resolve_mock.await_args.kwargs["status"] == "expired"
+    claim_mock.assert_awaited_once()
+    assert claim_mock.await_args.kwargs["status"] == "expired"
     # The lazy expiry was committed.
     assert request_session.commit_count == 1

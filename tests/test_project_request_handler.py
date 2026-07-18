@@ -102,20 +102,21 @@ def _pending_row(name: str = "agent-app"):
 
 
 @pytest.fixture
-def resolve_mock(monkeypatch):
-    """Patched ``resolve_request`` that mimics the real status transition."""
+def claim_mock(monkeypatch):
+    """Patched ``claim_request`` that mimics winning the CAS transition."""
 
-    async def _resolve(_session, request, *, status, project_id=None):
+    async def _claim(_session, request, *, status, project_id=None):
         request.status = status
         request.project_id = project_id
+        return True
 
-    mock = AsyncMock(side_effect=_resolve)
-    monkeypatch.setattr(handler_mod, "resolve_request", mock)
+    mock = AsyncMock(side_effect=_claim)
+    monkeypatch.setattr(handler_mod, "claim_request", mock)
     return mock
 
 
 async def test_approve_creates_project_and_shows_key(
-    monkeypatch, mock_session, stub_user, resolve_mock
+    monkeypatch, mock_session, stub_user, claim_mock
 ):
     row = _pending_row(name="agent-app")
     monkeypatch.setattr(handler_mod, "get_request", AsyncMock(return_value=row))
@@ -135,10 +136,10 @@ async def test_approve_creates_project_and_shows_key(
     assert kwargs["admin_chat_id"] == ADMIN_ID
     assert kwargs["domain_allowlist"] == ["example.com"]
 
-    # The request was resolved as approved and linked to the project.
-    resolve_mock.assert_awaited_once()
-    assert resolve_mock.await_args.kwargs["status"] == "approved"
-    assert resolve_mock.await_args.kwargs["project_id"] == PROJECT_ID
+    # The request was claimed as approved and linked to the project.
+    claim_mock.assert_awaited_once()
+    assert claim_mock.await_args.kwargs["status"] == "approved"
+    assert claim_mock.await_args.kwargs["project_id"] == PROJECT_ID
     assert row.status == "approved"
     mock_session.commit.assert_awaited()
 
@@ -148,7 +149,7 @@ async def test_approve_creates_project_and_shows_key(
     assert "plainkey123" in text
 
 
-async def test_reject_resolves_without_creating(monkeypatch, mock_session, resolve_mock):
+async def test_reject_resolves_without_creating(monkeypatch, mock_session, claim_mock):
     row = _pending_row()
     monkeypatch.setattr(handler_mod, "get_request", AsyncMock(return_value=row))
     monkeypatch.setattr(handler_mod, "is_expired", MagicMock(return_value=False))
@@ -158,8 +159,8 @@ async def test_reject_resolves_without_creating(monkeypatch, mock_session, resol
     update, ctx, query = _make_callback(f"pcr:no:{REQUEST_ID}")
     await project_request_callback(update, ctx)
 
-    resolve_mock.assert_awaited_once()
-    assert resolve_mock.await_args.kwargs["status"] == "rejected"
+    claim_mock.assert_awaited_once()
+    assert claim_mock.await_args.kwargs["status"] == "rejected"
     assert row.status == "rejected"
     create_mock.assert_not_awaited()
     mock_session.commit.assert_awaited()
@@ -168,7 +169,7 @@ async def test_reject_resolves_without_creating(monkeypatch, mock_session, resol
     assert "Rejected" in text
 
 
-async def test_malformed_callback_data(monkeypatch, resolve_mock):
+async def test_malformed_callback_data(monkeypatch, claim_mock):
     get_mock = AsyncMock()
     monkeypatch.setattr(handler_mod, "get_request", get_mock)
 
@@ -177,20 +178,20 @@ async def test_malformed_callback_data(monkeypatch, resolve_mock):
 
     query.edit_message_text.assert_called_once_with("❌ Invalid request.")
     get_mock.assert_not_awaited()
-    resolve_mock.assert_not_awaited()
+    claim_mock.assert_not_awaited()
 
 
-async def test_request_not_found(monkeypatch, resolve_mock):
+async def test_request_not_found(monkeypatch, claim_mock):
     monkeypatch.setattr(handler_mod, "get_request", AsyncMock(return_value=None))
 
     update, ctx, query = _make_callback(f"pcr:yes:{REQUEST_ID}")
     await project_request_callback(update, ctx)
 
     query.edit_message_text.assert_called_once_with("❌ Request not found.")
-    resolve_mock.assert_not_awaited()
+    claim_mock.assert_not_awaited()
 
 
-async def test_already_resolved_request(monkeypatch, resolve_mock):
+async def test_already_resolved_request(monkeypatch, claim_mock):
     row = _pending_row()
     row.status = "approved"
     monkeypatch.setattr(handler_mod, "get_request", AsyncMock(return_value=row))
@@ -203,10 +204,10 @@ async def test_already_resolved_request(monkeypatch, resolve_mock):
     text = query.edit_message_text.call_args[0][0]
     assert "already approved" in text
     create_mock.assert_not_awaited()
-    resolve_mock.assert_not_awaited()
+    claim_mock.assert_not_awaited()
 
 
-async def test_expired_pending_row(monkeypatch, mock_session, resolve_mock):
+async def test_expired_pending_row(monkeypatch, mock_session, claim_mock):
     row = _pending_row()
     monkeypatch.setattr(handler_mod, "get_request", AsyncMock(return_value=row))
     monkeypatch.setattr(handler_mod, "is_expired", MagicMock(return_value=True))
@@ -216,8 +217,8 @@ async def test_expired_pending_row(monkeypatch, mock_session, resolve_mock):
     update, ctx, query = _make_callback(f"pcr:yes:{REQUEST_ID}")
     await project_request_callback(update, ctx)
 
-    resolve_mock.assert_awaited_once()
-    assert resolve_mock.await_args.kwargs["status"] == "expired"
+    claim_mock.assert_awaited_once()
+    assert claim_mock.await_args.kwargs["status"] == "expired"
     assert row.status == "expired"
     create_mock.assert_not_awaited()
     mock_session.commit.assert_awaited()
@@ -226,7 +227,7 @@ async def test_expired_pending_row(monkeypatch, mock_session, resolve_mock):
     assert "expired" in text
 
 
-async def test_extension_error_leaves_request_pending(monkeypatch, resolve_mock):
+async def test_extension_error_leaves_request_pending(monkeypatch, claim_mock):
     row = _pending_row()
     monkeypatch.setattr(handler_mod, "get_request", AsyncMock(return_value=row))
     monkeypatch.setattr(handler_mod, "is_expired", MagicMock(return_value=False))
@@ -239,9 +240,56 @@ async def test_extension_error_leaves_request_pending(monkeypatch, resolve_mock)
     update, ctx, query = _make_callback(f"pcr:yes:{REQUEST_ID}")
     await project_request_callback(update, ctx)
 
-    # The plugin error was rendered verbatim, the request stayed pending.
-    query.edit_message_text.assert_called_once_with(
-        "🚫 Plan limit reached — upgrade to add projects."
-    )
-    resolve_mock.assert_not_awaited()
+    # The plugin error was rendered verbatim, the request stayed pending,
+    # and the Approve/Reject keyboard was re-attached for a retry.
+    query.edit_message_text.assert_called_once()
+    args, kwargs = query.edit_message_text.call_args
+    assert args[0] == "🚫 Plan limit reached — upgrade to add projects."
+    markup = kwargs["reply_markup"]
+    buttons = [button for line in markup.inline_keyboard for button in line]
+    assert [b.callback_data for b in buttons] == [
+        f"pcr:yes:{REQUEST_ID}",
+        f"pcr:no:{REQUEST_ID}",
+    ]
+    claim_mock.assert_not_awaited()
     assert row.status == "pending"
+
+
+async def test_double_tap_approve_already_claimed(monkeypatch, mock_session, claim_mock):
+    """Losing the CAS race rolls back the just-created project."""
+    row = _pending_row()
+    monkeypatch.setattr(handler_mod, "get_request", AsyncMock(return_value=row))
+    monkeypatch.setattr(handler_mod, "is_expired", MagicMock(return_value=False))
+    project = SimpleNamespace(id=PROJECT_ID, name="agent-app")
+    monkeypatch.setattr(
+        handler_mod, "create_project", AsyncMock(return_value=(project, "plainkey123"))
+    )
+    claim_mock.side_effect = None
+    claim_mock.return_value = False
+
+    update, ctx, query = _make_callback(f"pcr:yes:{REQUEST_ID}")
+    await project_request_callback(update, ctx)
+
+    # create_project may have run — the rollback discards it. (The
+    # ``@requires_user`` decorator still commits on return, but that
+    # commit only closes the now-empty transaction.)
+    mock_session.rollback.assert_awaited_once()
+    query.edit_message_text.assert_called_once_with("ℹ️ This request was already handled.")
+
+
+async def test_sender_mismatch_is_silently_ignored(monkeypatch, claim_mock):
+    """A callback whose sender isn't the resolved owner does nothing."""
+    get_mock = AsyncMock()
+    monkeypatch.setattr(handler_mod, "get_request", get_mock)
+    create_mock = AsyncMock()
+    monkeypatch.setattr(handler_mod, "create_project", create_mock)
+
+    update, ctx, query = _make_callback(f"pcr:yes:{REQUEST_ID}")
+    update.effective_user.id = ADMIN_ID + 1
+
+    await project_request_callback(update, ctx)
+
+    get_mock.assert_not_awaited()
+    create_mock.assert_not_awaited()
+    claim_mock.assert_not_awaited()
+    query.edit_message_text.assert_not_called()

@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.project_create_request import ProjectCreateRequest
@@ -114,18 +114,50 @@ def is_expired(
     return now - created_at > REQUEST_TTL
 
 
-async def resolve_request(
+async def claim_request(
     session: AsyncSession,
     request: ProjectCreateRequest,
     *,
     status: str,
     project_id: uuid.UUID | None = None,
-) -> None:
-    """Move *request* to a terminal *status* (approved/rejected/expired)."""
+) -> bool:
+    """Atomically move *request* from ``pending`` to a terminal *status*.
+
+    Compare-and-set: the UPDATE only matches while the row's stored
+    status is still ``pending``, so exactly one concurrent caller wins.
+    In webhook mode ``application.process_update`` runs per HTTP request,
+    so two rapid Approve taps race each other — without this guard both
+    would read ``pending`` and both create a project.
+
+    On Postgres a concurrent UPDATE of the same row blocks on the row
+    lock until the first transaction commits, then re-evaluates its WHERE
+    clause against the committed row and matches 0 rows. ``rowcount``
+    therefore tells us whether *we* performed the transition.
+
+    Returns True if this call claimed the request (attributes on the ORM
+    object are updated in place and the ``project.create.request.<status>``
+    audit entry is written); False if another transaction already
+    resolved it — the caller should roll back and treat the request as
+    already handled.
+    """
+    resolved_at = datetime.now(UTC)
+    result = await session.execute(
+        update(ProjectCreateRequest)
+        .where(
+            ProjectCreateRequest.id == request.id,
+            ProjectCreateRequest.status == "pending",
+        )
+        .values(status=status, project_id=project_id, resolved_at=resolved_at)
+    )
+    await session.flush()
+    if result.rowcount != 1:
+        return False
+
+    # Refresh the ORM object in place so callers can read the terminal
+    # state without a refetch.
     request.status = status
     request.project_id = project_id
-    request.resolved_at = datetime.now(UTC)
-    await session.flush()
+    request.resolved_at = resolved_at
 
     await write_audit(
         session,
@@ -135,3 +167,4 @@ async def resolve_request(
         target_id=str(request.id),
         metadata={"name": request.name},
     )
+    return True
