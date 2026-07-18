@@ -1,6 +1,6 @@
 """Project-discovery MCP tools.
 
-Four handlers:
+Six handlers:
 
 - ``list_projects`` — returns every project owned by the authenticated user.
 - ``get_project`` — returns a single project by id (404-equivalent if the
@@ -10,6 +10,11 @@ Four handlers:
 - ``rotate_api_key`` — invalidates the project's current API key and
   returns a freshly generated plaintext key (shown exactly once,
   since the server only stores ``api_key_hash``).
+- ``create_project`` — files a *pending* project-create request that the
+  owner must approve in the Telegram bot; never creates the project
+  directly.
+- ``get_project_request_status`` — polls a project-create request until
+  it resolves (approved/rejected/expired).
 
 All follow the Phase 4 ``whoami`` shape:
 
@@ -37,10 +42,12 @@ from app.mcp.auth import (
     assert_project_owned_by,
 )
 from app.mcp.tools._schemas import (
+    CreateProjectRequestResult,
     GetProjectResult,
     ListEventNamesResult,
     ListProjectsResult,
     ProjectInfo,
+    ProjectRequestStatusResult,
     RotateAPIKeyResult,
 )
 from app.mcp.tools._session import open_session
@@ -104,7 +111,7 @@ def _project_to_info(project: Any) -> ProjectInfo:
 
 
 def register_project_tools(mcp: FastMCP) -> None:
-    """Register the three project-discovery tools onto *mcp*."""
+    """Register the project discovery and mutation tools onto *mcp*."""
 
     @mcp.tool(title="List projects", annotations=_READ_ONLY)
     async def list_projects() -> list[TextContent] | ListProjectsResult:
@@ -275,4 +282,178 @@ def register_project_tools(mcp: FastMCP) -> None:
                 "events. Save this new key now; it cannot be retrieved "
                 "later (the server only stores a hash)."
             ),
+        )
+
+    @mcp.tool(
+        title="Create project (requires user confirmation)",
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+    )
+    async def create_project(
+        name: str,
+        domain_allowlist: list[str] | None = None,
+    ) -> list[TextContent] | CreateProjectRequestResult:
+        """File a request to create a new project. Does NOT create it directly.
+
+        This tool inserts a *pending* project-create request and asks the
+        owning user to approve or reject it in the Telegram bot. The
+        project only comes into existence after the user taps Approve —
+        an agent can never create a project without that confirmation.
+
+        Workflow:
+
+        1. Call this tool with the desired ``name`` (and optional
+           ``domain_allowlist``). You get back a ``request_id`` with
+           status ``pending``.
+        2. Poll ``get_project_request_status`` with that ``request_id``
+           until the status changes. The user typically responds within
+           a few minutes.
+        3. On ``approved``, the response includes the new ``project_id``.
+           Call ``rotate_api_key`` with it to obtain an API key, then
+           ``get_sdk_snippet`` to integrate.
+
+        Requests that the user does not act on expire after 5 minutes
+        (status ``expired``); you may file a new one afterwards.
+
+        Response: :class:`CreateProjectRequestResult`
+        (``request_id``, ``status``, ``message``).
+        """
+        token = get_access_token()
+        if token is None or not isinstance(token, MCPAccessToken):
+            return _not_authenticated()
+
+        clean_name = name.strip() if isinstance(name, str) else ""
+        if not 1 <= len(clean_name) <= 120:
+            return _bad_input("invalid name; must be 1-120 characters after trimming whitespace")
+
+        clean_allowlist: list[str] = []
+        if domain_allowlist is not None:
+            if len(domain_allowlist) > 20:
+                return _bad_input("domain_allowlist too long; at most 20 entries")
+            for entry in domain_allowlist:
+                clean = entry.strip() if isinstance(entry, str) else ""
+                if not clean or len(clean) > 253:
+                    return _bad_input(
+                        f"invalid domain_allowlist entry {entry!r}; each entry must "
+                        "be a non-empty string of at most 253 characters"
+                    )
+                clean_allowlist.append(clean)
+
+        owner_user_id = uuid.UUID(token.extra["user_id"])
+
+        from app.mcp.notify import notify_project_request
+        from app.models.user import User
+        from app.services.project_requests import (
+            PendingCapExceededError,
+            create_request,
+        )
+
+        async with open_session() as session:
+            try:
+                row = await create_request(
+                    session,
+                    owner_user_id=owner_user_id,
+                    name=clean_name,
+                    domain_allowlist=clean_allowlist,
+                    requested_via="mcp",
+                )
+            except PendingCapExceededError:
+                return _bad_input(
+                    "too many pending project requests; ask the user to approve "
+                    "or reject them in the Telegram bot first"
+                )
+
+            from sqlalchemy import select
+
+            result = await session.execute(
+                select(User.telegram_user_id).where(User.id == owner_user_id)
+            )
+            telegram_user_id = result.scalar_one_or_none()
+            request_id = str(row.id)
+
+            await session.commit()
+
+        # Best-effort Telegram notification — never fails the tool call
+        # (notify_project_request already swallows every exception).
+        if telegram_user_id is not None:
+            try:
+                await notify_project_request(
+                    chat_id=telegram_user_id,
+                    request_id=request_id,
+                    name=clean_name,
+                    domain_allowlist=clean_allowlist,
+                )
+            except Exception:
+                logger.warning("failed to notify user of project-create request", exc_info=True)
+
+        return CreateProjectRequestResult(
+            request_id=request_id,
+            status="pending",
+            message=(
+                "The user has been asked to approve this project in the "
+                "Telegram bot. Poll get_project_request_status with this "
+                "request_id until it resolves — the typical wait is a few "
+                "minutes. The request expires after 5 minutes, so poll promptly."
+            ),
+        )
+
+    @mcp.tool(title="Get project request status", annotations=_READ_ONLY)
+    async def get_project_request_status(
+        request_id: str,
+    ) -> list[TextContent] | ProjectRequestStatusResult:
+        """Poll the status of a project-create request filed via ``create_project``.
+
+        Statuses: ``pending`` (awaiting the user's decision in Telegram),
+        ``approved`` (project created — ``project_id`` is set), ``rejected``
+        (the user declined), ``expired`` (no decision within 5 minutes).
+        """
+        token = get_access_token()
+        if token is None or not isinstance(token, MCPAccessToken):
+            return _not_authenticated()
+
+        try:
+            rid = uuid.UUID(request_id)
+        except (ValueError, AttributeError):
+            return _bad_input(f"invalid request_id {request_id!r}; must be a UUID")
+
+        owner_user_id = uuid.UUID(token.extra["user_id"])
+
+        from app.services.project_requests import (
+            get_request,
+            is_expired,
+            resolve_request,
+        )
+
+        async with open_session() as session:
+            row = await get_request(session, rid, owner_user_id)
+            if row is None:
+                return _bad_input(f"request {request_id} not found or you don't have access")
+
+            if row.status == "pending" and is_expired(row):
+                await resolve_request(session, row, status="expired")
+                await session.commit()
+
+            status = row.status
+            project_id = str(row.project_id) if row.project_id else None
+
+        messages = {
+            "pending": "waiting for the user to approve in the Telegram bot",
+            "approved": (
+                f"approved — project {project_id} was created; call "
+                "rotate_api_key to obtain an API key, then get_sdk_snippet "
+                "to integrate"
+            ),
+            "rejected": "the user rejected this request",
+            "expired": "request expired without a decision; you may file a new one",
+        }
+
+        return ProjectRequestStatusResult(
+            request_id=str(rid),
+            status=status,
+            project_id=project_id,
+            message=messages.get(status, status),
         )

@@ -196,6 +196,39 @@ class RotateAPIKeyResult(BaseModel):
     message: str
 
 
+class CreateProjectRequestResult(BaseModel):
+    """Result of :func:`create_project_request`.
+
+    Creating a project over MCP never creates it directly — it inserts a
+    pending request that the owner must approve in the Telegram bot.
+    """
+
+    request_id: str = Field(..., description="UUID of the pending project-create request.")
+    status: str = Field(..., description='Always "pending" on creation.')
+    message: str = Field(
+        ...,
+        description=(
+            "Human-readable next step, e.g. instructions to approve the "
+            "request in Telegram and poll its status."
+        ),
+    )
+
+
+class ProjectRequestStatusResult(BaseModel):
+    """Result of :func:`get_project_request_status`."""
+
+    request_id: str = Field(..., description="UUID of the project-create request being polled.")
+    status: str = Field(
+        ...,
+        description=("Current lifecycle state: pending | approved | rejected | expired."),
+    )
+    project_id: str | None = Field(
+        None,
+        description="UUID of the created project. Set only when approved.",
+    )
+    message: str = Field(..., description="Human-readable summary of the current state.")
+
+
 # Re-exports to keep import sites tidy.
 __all__ = [
     "WhoamiResult",
@@ -215,4 +248,6 @@ __all__ = [
     "IntegrationGuideResult",
     "SDKSnippetResult",
     "RotateAPIKeyResult",
+    "CreateProjectRequestResult",
+    "ProjectRequestStatusResult",
 ]

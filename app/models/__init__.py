@@ -13,12 +13,14 @@ from app.models.funnel import Funnel
 from app.models.mcp_oauth import MCPSelfhostOAuthClient, MCPSelfhostOAuthCode
 from app.models.mcp_token import MCPToken
 from app.models.project import Project
+from app.models.project_create_request import ProjectCreateRequest
 from app.models.scheduled_report import ChartPeriod, ReportFrequency, ScheduledReport
 from app.models.settings import ProjectSettings
 from app.models.user import User
 
 __all__ = [
     "Project",
+    "ProjectCreateRequest",
     "User",
     "Event",
     "Aggregation",
