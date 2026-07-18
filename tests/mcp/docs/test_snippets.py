@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.mcp.docs.render import _env
+from app.mcp.docs.render import _env, _resolve_server_url
 
 
 @pytest.mark.parametrize(
@@ -122,3 +122,62 @@ def test_placeholder_key_is_not_html_escaped():
     )
     assert "<YOUR_API_KEY>" in rendered
     assert "&lt;" not in rendered
+
+
+# ── server_url resolution ─────────────────────────────────────────────
+# Regression: the snippet used to hardcode https://api.tgram-analytics.com
+# regardless of which instance rendered it. Projects and API keys are
+# per-instance, so a key minted by a self-hosted MCP was rejected with
+# 400 "Invalid API key" by the canonical host — a silently broken install.
+
+
+def _patch_settings(monkeypatch, **attrs):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr("app.core.config.get_settings", lambda: SimpleNamespace(**attrs))
+
+
+def test_server_url_uses_instance_public_url(monkeypatch):
+    """The snippet points at *this* instance, not a hardcoded host."""
+    _patch_settings(monkeypatch, mcp_effective_public_url="https://tga.example.com")
+
+    assert _resolve_server_url() == "https://tga.example.com"
+
+
+def test_server_url_strips_trailing_slash(monkeypatch):
+    _patch_settings(monkeypatch, mcp_effective_public_url="https://tga.example.com/")
+
+    assert _resolve_server_url() == "https://tga.example.com"
+
+
+def test_server_url_falls_back_when_settings_unavailable(monkeypatch):
+    """No settings (CI without env vars) ⇒ canonical host, not a crash."""
+
+    def _boom():
+        raise RuntimeError("no env")
+
+    monkeypatch.setattr("app.core.config.get_settings", _boom)
+
+    assert _resolve_server_url() == "https://api.tgram-analytics.com"
+
+
+def test_server_url_falls_back_when_public_url_empty(monkeypatch):
+    _patch_settings(monkeypatch, mcp_effective_public_url="")
+
+    assert _resolve_server_url() == "https://api.tgram-analytics.com"
+
+
+@pytest.mark.parametrize("platform", ["js", "python", "flutter"])
+def test_every_platform_snippet_uses_configured_base_url(platform: str, monkeypatch):
+    """Every template — not just js — must carry the instance's own URL."""
+    _patch_settings(monkeypatch, mcp_effective_public_url="https://tga.example.com")
+
+    from app.mcp.docs.render import _PACKAGE_NAMES, _TEMPLATES
+
+    rendered = _env.get_template(_TEMPLATES[platform]).render(
+        api_key="<YOUR_API_KEY>",
+        server_url=_resolve_server_url(),
+        package_name=_PACKAGE_NAMES[platform],
+    )
+    assert "https://tga.example.com" in rendered
+    assert "api.tgram-analytics.com" not in rendered
