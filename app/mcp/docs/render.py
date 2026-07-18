@@ -55,6 +55,11 @@ _PACKAGE_NAMES: dict[str, str] = {
 
 _SNIPPETS_DIR = Path(__file__).parent / "snippets"
 
+# Last-resort ingestion URL, used only when settings cannot be loaded
+# at all. Never a substitute for the instance's own configured base URL
+# — see ``_resolve_server_url``.
+_FALLBACK_SERVER_URL = "https://api.tgram-analytics.com"
+
 # Single shared environment — Jinja templates are reloaded only when
 # the file mtime changes, and we never write to them at runtime.
 _env = Environment(
@@ -67,20 +72,34 @@ _env = Environment(
 def _resolve_server_url() -> str:
     """Return the public ingestion URL the SDK should point at.
 
-    Reads ``settings.meta_tga_server_url`` (the same setting the
-    cloud overlay's own analytics fan-out uses). If for any reason the
-    setting cannot be loaded (CI without env vars, OSS-only
-    install), we fall back to the canonical hosted URL — the snippet
-    is meant for a copy-paste onboarding experience and a stable
-    default beats a 500.
+    This must be **this instance's own** public base URL, not a
+    canonical hosted one. Projects and API keys are per-instance: a
+    key minted by the MCP running on ``https://tga.example.com``
+    is only valid against ``https://tga.example.com/api/v1/...``.
+    Handing out a snippet pointing anywhere else produces a silently
+    broken install — the SDK posts events and every one is rejected
+    with ``400 {"detail":"Invalid API key"}``.
+
+    We reuse :attr:`Settings.mcp_effective_public_url` — the same
+    resolved base URL the MCP already advertises in its OAuth
+    issuer/resource metadata (``MCP_PUBLIC_URL`` → ``WEBHOOK_BASE_URL``
+    → ``http://localhost:8000``). The MCP surface and the ingestion API
+    are served by the same app off the same origin, so whatever host
+    the caller reached ``/mcp`` on is exactly the host that owns their
+    project.
+
+    If settings cannot be loaded at all (CI without env vars), we fall
+    back to the canonical hosted URL — the snippet is a copy-paste
+    onboarding aid and a stable default beats a 500.
     """
     try:
         from app.core.config import get_settings
 
         settings: Any = get_settings()
     except Exception:
-        return "https://api.tgram-analytics.com"
-    return getattr(settings, "meta_tga_server_url", "https://api.tgram-analytics.com")
+        return _FALLBACK_SERVER_URL
+    url = getattr(settings, "mcp_effective_public_url", "") or ""
+    return url.rstrip("/") or _FALLBACK_SERVER_URL
 
 
 async def render_snippet(
