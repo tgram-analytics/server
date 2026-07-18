@@ -212,32 +212,45 @@ MAX_PROPERTIES_BYTES = 4096
 # ── Segment-based key matching ─────────────────────────────────────────────
 #
 # Property keys are normalized into lowercase segments before matching:
-# camelCase boundaries become separators, then the key is split on runs of
-# non-alphanumeric characters. ``userEmail`` → ("user", "email"),
-# ``credit-card_number`` → ("credit", "card", "number"). A key is PII when
-# any denylist term (itself segmented the same way) appears as a contiguous
-# run of segments. Comparison is exact per segment: ``tokens`` does not
-# match ``token``, ``emailed`` does not match ``email``.
+# camelCase and letter<->digit boundaries become separators, then the key is
+# split on runs of ASCII non-alphanumeric characters (accented letters act
+# as separators too). ``userEmail`` → ("user", "email"), ``email2`` →
+# ("email", "2"), ``credit-card_number`` → ("credit", "card", "number").
+# A key is PII when any denylist term (itself segmented the same way)
+# appears as a contiguous run of segments. Comparison is exact per segment:
+# ``tokens`` does not match ``token``, ``emailed`` does not match ``email``.
 
-_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+_SEGMENT_BOUNDARY = re.compile(
+    r"(?<=[a-z0-9])(?=[A-Z])"  # camelCase: lower/digit → upper
+    r"|(?<=[A-Z])(?=[A-Z][a-z])"  # acronym end: HTTPToken → HTTP_Token
+    r"|(?<=[A-Za-z])(?=[0-9])"  # letter → digit: email2 → email_2
+    r"|(?<=[0-9])(?=[A-Za-z])"  # digit → letter: 2email → 2_email
+)
 _NON_ALNUM_RUN = re.compile(r"[^a-z0-9]+")
 
 
 def _key_segments(key: str) -> tuple[str, ...]:
-    """Normalize *key* into lowercase alphanumeric segments."""
-    decameled = _CAMEL_BOUNDARY.sub("_", key)
-    return tuple(seg for seg in _NON_ALNUM_RUN.split(decameled.lower()) if seg)
+    """Normalize *key* into lowercase ASCII-alphanumeric segments."""
+    separated = _SEGMENT_BOUNDARY.sub("_", key)
+    return tuple(seg for seg in _NON_ALNUM_RUN.split(separated.lower()) if seg)
 
 
 # Precomputed at import: denylist terms as segment tuples (``credit_card`` →
 # ("credit", "card")), so the hot path never re-segments the denylist.
+# Empty tuples are filtered so the matcher can assume every term is non-empty.
 _PII_TERM_SEGMENTS: tuple[tuple[str, ...], ...] = tuple(
-    _key_segments(term) for term in PII_DENYLIST
+    segs for segs in (_key_segments(term) for term in PII_DENYLIST) if segs
 )
+
+# Keys longer than this bypass the lru_cache: property names are attacker
+# controlled (request bodies up to ~1 MB reach the scrubber before the 4 KB
+# properties cap applies), and the cache would otherwise pin arbitrarily
+# large distinct strings in memory.
+_MAX_CACHED_KEY_LEN = 256
 
 
 @functools.lru_cache(maxsize=4096)
-def _is_pii_key(key: str) -> bool:
+def _is_pii_key_cached(key: str) -> bool:
     """True when any denylist term is a contiguous segment run inside *key*.
 
     Cached: property-key strings repeat heavily across events, so the
@@ -247,11 +260,18 @@ def _is_pii_key(key: str) -> bool:
     n = len(segments)
     for term in _PII_TERM_SEGMENTS:
         t = len(term)
-        if 0 < t <= n:
+        if t <= n:
             for i in range(n - t + 1):
                 if segments[i : i + t] == term:
                     return True
     return False
+
+
+def _is_pii_key(key: str) -> bool:
+    """Cache-aware wrapper: oversized keys skip the cache entirely."""
+    if len(key) > _MAX_CACHED_KEY_LEN:
+        return _is_pii_key_cached.__wrapped__(key)
+    return _is_pii_key_cached(key)
 
 
 # Module-level counters for PII / oversized observations. Snapshotted by

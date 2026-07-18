@@ -107,6 +107,45 @@ def test_mixed_separators_and_spaces() -> None:
     assert set(dropped) == {"customer email", "tax.id", "card  number"}
 
 
+def test_digit_boundaries_form_segments() -> None:
+    """Digit-glued denylist terms are dropped; digit-free safe words stay."""
+    scrubbed, dropped, _ = scrub_properties(
+        {
+            "email2": "x",
+            "phone1": "x",
+            "token0": "x",
+            "2email": "x",
+            "tokens_count": 3,  # "tokens" segment still != "token"
+            "b2b_plan": "pro",
+        }
+    )
+    assert scrubbed == {"tokens_count": 3, "b2b_plan": "pro"}
+    assert set(dropped) == {"email2", "phone1", "token0", "2email"}
+
+
+def test_unicode_and_degenerate_keys_are_safe() -> None:
+    """Non-ASCII letters act as separators; empty/separator-only keys survive."""
+    props = {"émail": "x", "": "empty", "___": "unders"}
+    scrubbed, dropped, oversized = scrub_properties(dict(props))
+    assert scrubbed == props  # "émail" segments to ("mail",) — no denylist hit
+    assert dropped == []
+    assert oversized is False
+
+
+def test_long_keys_bypass_cache_and_still_match() -> None:
+    """Keys over the cache-length threshold still get correct verdicts."""
+    from app.core.privacy import _is_pii_key_cached
+
+    long_safe = "x" * 300
+    long_pii = "email_" + "x" * 300
+    size_before = _is_pii_key_cached.cache_info().currsize
+    scrubbed, dropped, _ = scrub_properties({long_safe: 1, long_pii: 2})
+    assert scrubbed == {long_safe: 1}
+    assert dropped == [long_pii]
+    # Oversized keys must not be retained by the cache.
+    assert _is_pii_key_cached.cache_info().currsize == size_before
+
+
 def test_dropped_keys_preserve_original_casing_compound() -> None:
     _, dropped, _ = scrub_properties({"UserEmail": "x", "AUTH-TOKEN": "x"})
     assert set(dropped) == {"UserEmail", "AUTH-TOKEN"}
