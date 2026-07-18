@@ -343,6 +343,20 @@ def register_project_tools(mcp: FastMCP) -> None:
                     )
                 clean_allowlist.append(clean)
 
+        # Canonicalize entries the same way the settings handler and
+        # app.schemas.project do (bare lowercase host[:port], wildcard
+        # preserved, dupes dropped) — migration 0009 normalized stored data.
+        from app.services.events import normalize_origin_entries
+
+        normalized_allowlist = normalize_origin_entries(clean_allowlist)
+        if clean_allowlist and not normalized_allowlist:
+            return _bad_input(
+                "no valid domains in domain_allowlist; entries must be "
+                "hostnames or URLs like example.com, https://example.com "
+                "or *.example.com"
+            )
+        clean_allowlist = normalized_allowlist
+
         owner_user_id = uuid.UUID(token.extra["user_id"])
 
         from app.mcp.notify import notify_project_request
@@ -380,15 +394,12 @@ def register_project_tools(mcp: FastMCP) -> None:
         # Best-effort Telegram notification — never fails the tool call
         # (notify_project_request already swallows every exception).
         if telegram_user_id is not None:
-            try:
-                await notify_project_request(
-                    chat_id=telegram_user_id,
-                    request_id=request_id,
-                    name=clean_name,
-                    domain_allowlist=clean_allowlist,
-                )
-            except Exception:
-                logger.warning("failed to notify user of project-create request", exc_info=True)
+            await notify_project_request(
+                chat_id=telegram_user_id,
+                request_id=request_id,
+                name=clean_name,
+                domain_allowlist=clean_allowlist,
+            )
 
         return CreateProjectRequestResult(
             request_id=request_id,
@@ -401,7 +412,16 @@ def register_project_tools(mcp: FastMCP) -> None:
             ),
         )
 
-    @mcp.tool(title="Get project request status", annotations=_READ_ONLY)
+    # Not ``_READ_ONLY``: polling a stale pending request lazily writes
+    # the ``expired`` transition. Still idempotent — repeated polls converge.
+    @mcp.tool(
+        title="Get project request status",
+        annotations=ToolAnnotations(
+            readOnlyHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
     async def get_project_request_status(
         request_id: str,
     ) -> list[TextContent] | ProjectRequestStatusResult:
@@ -423,9 +443,9 @@ def register_project_tools(mcp: FastMCP) -> None:
         owner_user_id = uuid.UUID(token.extra["user_id"])
 
         from app.services.project_requests import (
+            claim_request,
             get_request,
             is_expired,
-            resolve_request,
         )
 
         async with open_session() as session:
@@ -434,8 +454,17 @@ def register_project_tools(mcp: FastMCP) -> None:
                 return _bad_input(f"request {request_id} not found or you don't have access")
 
             if row.status == "pending" and is_expired(row):
-                await resolve_request(session, row, status="expired")
-                await session.commit()
+                if await claim_request(session, row, status="expired"):
+                    await session.commit()
+                else:
+                    # Lost the race — another transaction resolved the
+                    # request concurrently; report its current status.
+                    await session.rollback()
+                    row = await get_request(session, rid, owner_user_id)
+                    if row is None:
+                        return _bad_input(
+                            f"request {request_id} not found or you don't have access"
+                        )
 
             status = row.status
             project_id = str(row.project_id) if row.project_id else None

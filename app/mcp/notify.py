@@ -16,6 +16,22 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 logger = logging.getLogger("app.mcp")
 
 
+def approval_keyboard(request_id: str) -> InlineKeyboardMarkup:
+    """Approve/Reject inline keyboard for a project-create request.
+
+    Shared by the initial notification and the bot handler's retry path
+    (after an ``ExtensionError``) so the callback_data format never drifts.
+    """
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ Approve", callback_data=f"pcr:yes:{request_id}"),
+                InlineKeyboardButton("❌ Reject", callback_data=f"pcr:no:{request_id}"),
+            ]
+        ]
+    )
+
+
 async def notify_project_request(
     *, chat_id: int, request_id: str, name: str, domain_allowlist: list[str]
 ) -> None:
@@ -37,14 +53,7 @@ async def notify_project_request(
             chat_id=chat_id,
             text="\n".join(lines),
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton("✅ Approve", callback_data=f"pcr:yes:{request_id}"),
-                        InlineKeyboardButton("❌ Reject", callback_data=f"pcr:no:{request_id}"),
-                    ]
-                ]
-            ),
+            reply_markup=approval_keyboard(request_id),
         )
     except Exception:
         logger.warning("failed to send project-create request notification", exc_info=True)

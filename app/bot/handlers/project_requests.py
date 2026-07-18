@@ -30,8 +30,9 @@ from telegram.ext import ContextTypes
 
 from app.bot.auth import requires_user
 from app.core.config import get_settings
+from app.mcp.notify import approval_keyboard
 from app.models.user import User
-from app.services.project_requests import get_request, is_expired, resolve_request
+from app.services.project_requests import claim_request, get_request, is_expired
 from app.services.projects import create_project
 
 
@@ -46,6 +47,14 @@ async def project_request_callback(
     query = update.callback_query
     assert query is not None
     await query.answer()
+
+    # Defense-in-depth: the approval prompt lives in the owner's private
+    # chat, but callback_query updates carry their own sender id — never
+    # let a non-owner resolve a request. Silently ignore (no message
+    # edit): a forged callback should get no oracle.
+    sender = update.effective_user
+    if sender is None or sender.id != user.telegram_user_id:
+        return
 
     # callback_data is "pcr:yes:<uuid>" or "pcr:no:<uuid>"
     data: str = query.data or ""
@@ -70,7 +79,10 @@ async def project_request_callback(
         return
 
     if is_expired(row):
-        await resolve_request(session, row, status="expired")
+        if not await claim_request(session, row, status="expired"):
+            await session.rollback()
+            await query.edit_message_text("ℹ️ This request was already handled.")
+            return
         await session.commit()
         await query.edit_message_text(
             "⌛ This request has expired. Ask the agent to file a new one."
@@ -79,7 +91,10 @@ async def project_request_callback(
 
     name = row.name
     if not approve:
-        await resolve_request(session, row, status="rejected")
+        if not await claim_request(session, row, status="rejected"):
+            await session.rollback()
+            await query.edit_message_text("ℹ️ This request was already handled.")
+            return
         await session.commit()
         await query.edit_message_text(
             f"❌ Rejected — project <b>{html.escape(name)}</b> will not be created.",
@@ -99,11 +114,17 @@ async def project_request_callback(
         )
     except ExtensionError as exc:
         # Plugin-raised, user-facing — render the message and stop. The
-        # request stays pending so the owner can retry or reject.
-        await query.edit_message_text(str(exc))
+        # request stays pending, and the Approve/Reject keyboard is
+        # re-attached so the owner can retry or reject.
+        await query.edit_message_text(str(exc), reply_markup=approval_keyboard(str(row.id)))
         return
 
-    await resolve_request(session, row, status="approved", project_id=project.id)
+    # Claim AFTER creating the project: both run in the same transaction,
+    # so losing the claim race lets us roll back the just-created project.
+    if not await claim_request(session, row, status="approved", project_id=project.id):
+        await session.rollback()
+        await query.edit_message_text("ℹ️ This request was already handled.")
+        return
     await session.commit()
 
     settings = get_settings()
