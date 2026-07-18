@@ -209,6 +209,51 @@ PII_DENYLIST: frozenset[str] = frozenset(
 
 MAX_PROPERTIES_BYTES = 4096
 
+# ── Segment-based key matching ─────────────────────────────────────────────
+#
+# Property keys are normalized into lowercase segments before matching:
+# camelCase boundaries become separators, then the key is split on runs of
+# non-alphanumeric characters. ``userEmail`` → ("user", "email"),
+# ``credit-card_number`` → ("credit", "card", "number"). A key is PII when
+# any denylist term (itself segmented the same way) appears as a contiguous
+# run of segments. Comparison is exact per segment: ``tokens`` does not
+# match ``token``, ``emailed`` does not match ``email``.
+
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+_NON_ALNUM_RUN = re.compile(r"[^a-z0-9]+")
+
+
+def _key_segments(key: str) -> tuple[str, ...]:
+    """Normalize *key* into lowercase alphanumeric segments."""
+    decameled = _CAMEL_BOUNDARY.sub("_", key)
+    return tuple(seg for seg in _NON_ALNUM_RUN.split(decameled.lower()) if seg)
+
+
+# Precomputed at import: denylist terms as segment tuples (``credit_card`` →
+# ("credit", "card")), so the hot path never re-segments the denylist.
+_PII_TERM_SEGMENTS: tuple[tuple[str, ...], ...] = tuple(
+    _key_segments(term) for term in PII_DENYLIST
+)
+
+
+@functools.lru_cache(maxsize=4096)
+def _is_pii_key(key: str) -> bool:
+    """True when any denylist term is a contiguous segment run inside *key*.
+
+    Cached: property-key strings repeat heavily across events, so the
+    segmentation + scan cost is paid once per distinct key.
+    """
+    segments = _key_segments(key)
+    n = len(segments)
+    for term in _PII_TERM_SEGMENTS:
+        t = len(term)
+        if 0 < t <= n:
+            for i in range(n - t + 1):
+                if segments[i : i + t] == term:
+                    return True
+    return False
+
+
 # Module-level counters for PII / oversized observations. Snapshotted by
 # ``get_privacy_counters``; the operator-only HTTP surface arrives in 4.7.
 _privacy_counters: collections.Counter[tuple[str, str]] = collections.Counter()
@@ -223,8 +268,13 @@ def scrub_properties(
 
     Returns ``(scrubbed, dropped_keys, oversized)``:
 
-    * Keys are matched case-insensitively against ``PII_DENYLIST``; the
-      original casing is preserved in ``dropped_keys`` for telemetry.
+    * Keys are segment-matched against ``PII_DENYLIST``: each key is split
+      into lowercase segments (camelCase boundaries and non-alphanumeric
+      separators), and the key is dropped when any denylist term appears as
+      a contiguous run of whole segments (``user_email``, ``userEmail`` and
+      ``stripe.token`` are dropped; ``tokens_count`` and ``emailed`` are
+      kept). The original casing is preserved in ``dropped_keys`` for
+      telemetry.
     * Values are never inspected — key-based denylist only.
     * If the surviving dict serializes to more than ``MAX_PROPERTIES_BYTES``
       bytes (compact JSON), all properties are dropped and ``oversized`` is
@@ -236,7 +286,7 @@ def scrub_properties(
     dropped_keys: list[str] = []
     survivors: dict[str, Any] = {}
     for key, value in props.items():
-        if isinstance(key, str) and key.lower() in PII_DENYLIST:
+        if isinstance(key, str) and _is_pii_key(key):
             dropped_keys.append(key)
             continue
         survivors[key] = value
