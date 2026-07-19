@@ -408,6 +408,19 @@ Point your reverse proxy (Nginx/Caddy) at port `8000`.
 
 Add the environment variables from `.env.example` in the Railway dashboard.
 
+### Updating
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+Database migrations run automatically when the container starts — no manual
+step. Your `.env` and the `pgdata` volume are untouched by updates; check the
+release notes for any new environment variables before pulling.
+
+On Railway, redeploy from the latest commit in the dashboard.
+
 ---
 
 ## Contributing
