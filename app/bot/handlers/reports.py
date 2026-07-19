@@ -2,7 +2,6 @@
 
 Supports period switching (7d / 30d / 90d), granularity toggling
 (by day / by week), and period-over-period comparison charts.
-Also handles the /report <event> command.
 """
 
 from __future__ import annotations
@@ -20,18 +19,14 @@ from telegram import (
     InlineKeyboardMarkup,
     InputMediaPhoto,
     Message,
-    Update,
 )
-from telegram.ext import ContextTypes
 
-from app.bot.auth import requires_user
 from app.bot.constants import PERIOD_LABEL, PERIODS
 from app.core.database import get_session_factory
 from app.models.event import Event
-from app.models.user import User
 from app.services.analytics import compare_periods, events_over_time
 from app.services.charts import ChartGenerationError, generate_comparison_chart, generate_line_chart
-from app.services.projects import get_project, list_projects
+from app.services.projects import get_project
 
 # Re-bind module-private aliases so the rest of the file is unchanged.
 _PERIODS = PERIODS
@@ -392,195 +387,4 @@ async def send_report_comparison(
             caption=f"📊 {project.name} · {chart_event} · {delta_str}",
         ),
         reply_markup=keyboard,
-    )
-
-
-# ── /report command ────────────────────────────────────────────────────────────
-
-
-@requires_user
-async def report_command(
-    update: Update,
-    ctx: ContextTypes.DEFAULT_TYPE,
-    *,
-    user: User,
-    session: AsyncSession,
-) -> None:
-    """/report [event_name] — send an analytics chart for a specific event."""
-    assert update.message is not None
-    owner_user_id = user.id
-    event_name = " ".join(ctx.args) if ctx.args else None
-
-    projects = await list_projects(session, owner_user_id)
-
-    if not projects:
-        await update.message.reply_text(
-            "📭 No projects yet.\n\nUse /add <i>name</i> to create one.",
-            parse_mode="HTML",
-        )
-        return
-
-    if len(projects) == 1:
-        project = projects[0]
-        if event_name is None:
-            keyboard = InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            f"📊 {project.name}", callback_data=f"menu:events:{project.id}"
-                        )
-                    ]
-                ]
-            )
-            await update.message.reply_text(
-                "Which event would you like to chart? Tap to browse events:",
-                reply_markup=keyboard,
-            )
-        else:
-            await _send_report_chart_as_message(
-                update.message,
-                str(project.id),
-                project.name,
-                event_name,
-            )
-        return
-
-    # Multiple projects — show project picker
-    if event_name is None:
-        keyboard = InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton(f"📊 {p.name}", callback_data=f"menu:events:{p.id}")]
-                for p in projects
-            ]
-        )
-        await update.message.reply_text("Select a project to browse events:", reply_markup=keyboard)
-    else:
-        # Store the event name in user_data so the picker callback can retrieve it
-        assert ctx.user_data is not None
-        ctx.user_data["report_event"] = event_name
-        keyboard = InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton(f"📊 {p.name}", callback_data=f"rpt_pp:{p.id}")]
-                for p in projects
-            ]
-        )
-        await update.message.reply_text(
-            f"📊 Chart <b>{html.escape(event_name)}</b> — pick a project:",
-            parse_mode="HTML",
-            reply_markup=keyboard,
-        )
-
-
-async def handle_report_project_pick(
-    query: CallbackQuery,
-    project_id_str: str,
-    owner_user_id: uuid.UUID,
-    ctx: ContextTypes.DEFAULT_TYPE,
-) -> None:
-    """Handle rpt_pp: callback — user picked a project after /report <event>."""
-    assert isinstance(query.message, Message)
-    event_name: str | None = (ctx.user_data or {}).get("report_event")
-    if not event_name:
-        await query.edit_message_text("❌ Session expired. Use /report again.")
-        return
-
-    pid = uuid.UUID(project_id_str)
-    factory = get_session_factory()
-    async with factory() as session:
-        project = await get_project(session, pid, owner_user_id)
-    if project is None:
-        await query.edit_message_text("❌ Project not found.")
-        return
-
-    back_keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")]]
-    )
-    now = datetime.now(UTC)
-    period, gran = "7d", "day"
-    period_label = _PERIOD_LABEL[period]
-
-    factory = get_session_factory()
-    async with factory() as session:
-        data = await events_over_time(
-            session,
-            project_id=pid,
-            event_name=event_name,
-            start=now - _PERIODS[period],
-            end=now,
-            granularity=gran,
-        )
-
-    if not data:
-        await query.edit_message_text(
-            f"📭 No data for <b>{html.escape(event_name)}</b> in the {period_label}.",
-            parse_mode="HTML",
-            reply_markup=back_keyboard,
-        )
-        return
-
-    try:
-        png_bytes = await generate_line_chart(
-            data,
-            title=event_name,
-            period_label=period_label,
-        )
-    except ChartGenerationError:
-        await query.edit_message_text("⚠️ Chart service unavailable.", reply_markup=back_keyboard)
-        return
-
-    await query.edit_message_text(
-        f"📊 <b>{html.escape(event_name)}</b> — {period_label}  ↓",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")]]
-        ),
-    )
-    await query.message.reply_photo(
-        photo=png_bytes,
-        caption=f"📈 {project.name} · {event_name} · {period_label}",
-        reply_markup=_report_chart_keyboard(project_id_str, period, gran),
-    )
-
-
-async def _send_report_chart_as_message(
-    message: Message, project_id_str: str, project_name: str, event_name: str
-) -> None:
-    """Send a chart photo as a direct reply to a command message (not a callback)."""
-    pid = uuid.UUID(project_id_str)
-    now = datetime.now(UTC)
-    period, gran = "7d", "day"
-    period_label = _PERIOD_LABEL[period]
-
-    factory = get_session_factory()
-    async with factory() as session:
-        data = await events_over_time(
-            session,
-            project_id=pid,
-            event_name=event_name,
-            start=now - _PERIODS[period],
-            end=now,
-            granularity=gran,
-        )
-
-    if not data:
-        await message.reply_text(
-            f"📭 No data for <b>{html.escape(event_name)}</b> in the {period_label}.",
-            parse_mode="HTML",
-        )
-        return
-
-    try:
-        png_bytes = await generate_line_chart(
-            data,
-            title=event_name,
-            period_label=period_label,
-        )
-    except ChartGenerationError:
-        await message.reply_text("⚠️ Chart service unavailable. Please try again later.")
-        return
-
-    await message.reply_photo(
-        photo=png_bytes,
-        caption=f"📈 {project_name} · {event_name} · {period_label}",
-        reply_markup=_report_chart_keyboard(project_id_str, period, gran),
     )

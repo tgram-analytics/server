@@ -164,7 +164,7 @@ async def onboarding_callback(
             "1️⃣ You create a project and get an API key.\n"
             "2️⃣ You drop the SDK (or a curl) into your app and emit events.\n"
             "3️⃣ I tell you when something interesting happens — and "
-            "answer questions like /report signup or /events on demand.\n\n"
+            "you can browse Events or Reports for the project any time.\n\n"
             "Send /add to create your first project.",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(
@@ -217,7 +217,7 @@ async def _send_test_event(
     await query.edit_message_text(
         f"✅ <b>Test event sent for {project.name}!</b>\n\n"
         f"I just emitted an event named <code>test</code>.\n\n"
-        f"Run <code>/events</code> to see it — you'll find <code>test</code> "
+        f"Open the project's <b>Events</b> menu to see it — you'll find <code>test</code> "
         f"in the list with a count of 1.\n\n"
         f"Now hook your real app up using one of the SDKs:",
         parse_mode="HTML",
