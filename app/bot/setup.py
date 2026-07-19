@@ -35,7 +35,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     from app.bot.handlers.alerts import alert_callback, alerts_command, handle_text_message
     from app.bot.handlers.digest import digest_command
     from app.bot.handlers.doctor import doctor_command
-    from app.bot.handlers.events import events_callback, events_command
+    from app.bot.handlers.events import events_callback
     from app.bot.handlers.export import export_callback
     from app.bot.handlers.funnels import funnel_callback
     from app.bot.handlers.mcp import mcp_command
@@ -44,7 +44,6 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     from app.bot.handlers.overview import overview_command
     from app.bot.handlers.project_requests import project_request_callback
     from app.bot.handlers.projects import add_command, project_callback, projects_command
-    from app.bot.handlers.reports import report_command
     from app.bot.handlers.system import cancel_command, help_command, start_command
 
     # Defense-in-depth: every handler is also wrapped with ``@requires_user``
@@ -80,8 +79,6 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     app.add_handler(CommandHandler("cancel", cancel_command, filters=admin_filter))
     app.add_handler(CommandHandler("add", add_command, filters=admin_filter))
     app.add_handler(CommandHandler("projects", projects_command, filters=admin_filter))
-    app.add_handler(CommandHandler("events", events_command, filters=admin_filter))
-    app.add_handler(CommandHandler("report", report_command, filters=admin_filter))
     app.add_handler(CommandHandler("digest", digest_command, filters=admin_filter))
     app.add_handler(CommandHandler("overview", overview_command, filters=admin_filter))
     app.add_handler(CommandHandler("alerts", alerts_command, filters=admin_filter))
@@ -151,8 +148,6 @@ async def init_bot(
         [
             BotCommand("start", "Home menu"),
             BotCommand("projects", "List your projects"),
-            BotCommand("events", "Browse event types"),
-            BotCommand("report", "Chart for an event"),
             BotCommand("digest", "Weekly digest across all projects"),
             BotCommand("overview", "Visits chart across all projects"),
             BotCommand("alerts", "List active alerts"),

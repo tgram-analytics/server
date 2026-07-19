@@ -1,4 +1,4 @@
-"""Event browsing handlers: /events command and per-event actions."""
+"""Event browsing handlers: project-menu Events button and per-event actions."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ from app.services.charts import (
     generate_line_chart,
     generate_pie_chart,
 )
-from app.services.projects import get_project, list_projects
+from app.services.projects import get_project
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -91,38 +91,6 @@ def _event_chart_keyboard(period: str, gran: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton("« Back to Events", callback_data="back:events")],
         ]
     )
-
-
-# ── /events command ────────────────────────────────────────────────────────────
-
-
-@requires_user
-async def events_command(
-    update: Update,
-    ctx: ContextTypes.DEFAULT_TYPE,
-    *,
-    user: User,
-    session: AsyncSession,
-) -> None:
-    """Show project list so the user can pick one to browse events."""
-    assert update.message is not None
-
-    projects = await list_projects(session, user.id)
-
-    if not projects:
-        await update.message.reply_text(
-            "📭 No projects yet.\n\nUse /add <i>name</i> to create one.",
-            parse_mode="HTML",
-        )
-        return
-
-    keyboard = InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton(f"📊 {p.name}", callback_data=f"menu:events:{p.id}")]
-            for p in projects
-        ]
-    )
-    await update.message.reply_text("Select a project to browse events:", reply_markup=keyboard)
 
 
 # ── Callback dispatcher ────────────────────────────────────────────────────────
@@ -253,12 +221,16 @@ async def _show_events_list_from_state(query: CallbackQuery, owner_user_id: uuid
         state = await svc.get(query.message.chat_id)
 
     if state is None or state.flow != "events":
-        await query.edit_message_text("❌ Session expired. Use /events to start again.")
+        await query.edit_message_text(
+            "❌ Session expired. Open the project's Events menu to start again."
+        )
         return
 
     project_id_str = (state.payload or {}).get("project_id")
     if not project_id_str:
-        await query.edit_message_text("❌ Session expired. Use /events to start again.")
+        await query.edit_message_text(
+            "❌ Session expired. Open the project's Events menu to start again."
+        )
         return
 
     await show_events_menu(query, project_id_str, owner_user_id)
@@ -372,12 +344,16 @@ async def _show_event_detail(
         state = await svc.get(query.message.chat_id)
 
         if state is None or state.flow != "events":
-            await query.edit_message_text("❌ Session expired. Use /events to start again.")
+            await query.edit_message_text(
+                "❌ Session expired. Open the project's Events menu to start again."
+            )
             return
 
         project_id_str = (state.payload or {}).get("project_id")
         if not project_id_str:
-            await query.edit_message_text("❌ Session expired. Use /events to start again.")
+            await query.edit_message_text(
+                "❌ Session expired. Open the project's Events menu to start again."
+            )
             return
 
         pid = uuid.UUID(project_id_str)
@@ -452,7 +428,9 @@ async def _start_alert_for_event(query: CallbackQuery, owner_user_id: uuid.UUID)
         state = await svc.get(query.message.chat_id)
 
         if state is None or state.flow != "events" or state.step != "detail":
-            await query.edit_message_text("❌ Session expired. Use /events to start again.")
+            await query.edit_message_text(
+                "❌ Session expired. Open the project's Events menu to start again."
+            )
             return
 
         payload = state.payload or {}
@@ -460,7 +438,9 @@ async def _start_alert_for_event(query: CallbackQuery, owner_user_id: uuid.UUID)
         event_name = payload.get("event_name")
 
         if not project_id_str or not event_name:
-            await query.edit_message_text("❌ Session expired. Use /events to start again.")
+            await query.edit_message_text(
+                "❌ Session expired. Open the project's Events menu to start again."
+            )
             return
 
         await svc.save(
@@ -507,7 +487,9 @@ async def _send_event_chart(
         state = await svc.get(query.message.chat_id)
 
         if state is None or state.flow != "events" or state.step != "detail":
-            await query.edit_message_text("❌ Session expired. Use /events to start again.")
+            await query.edit_message_text(
+                "❌ Session expired. Open the project's Events menu to start again."
+            )
             return
 
         payload = state.payload or {}
@@ -515,7 +497,9 @@ async def _send_event_chart(
         event_name = payload.get("event_name")
 
         if not project_id_str or not event_name:
-            await query.edit_message_text("❌ Session expired. Use /events to start again.")
+            await query.edit_message_text(
+                "❌ Session expired. Open the project's Events menu to start again."
+            )
             return
 
         pid = uuid.UUID(project_id_str)
@@ -749,7 +733,9 @@ async def _show_pie_property_picker(query: CallbackQuery, owner_user_id: uuid.UU
         state = await svc.get(query.message.chat_id)
 
         if state is None or state.flow != "events" or state.step != "detail":
-            await query.edit_message_text("❌ Session expired. Use /events to start again.")
+            await query.edit_message_text(
+                "❌ Session expired. Open the project's Events menu to start again."
+            )
             return
 
         payload = state.payload or {}
@@ -757,7 +743,9 @@ async def _show_pie_property_picker(query: CallbackQuery, owner_user_id: uuid.UU
         event_name = payload.get("event_name")
 
         if not project_id_str or not event_name:
-            await query.edit_message_text("❌ Session expired. Use /events to start again.")
+            await query.edit_message_text(
+                "❌ Session expired. Open the project's Events menu to start again."
+            )
             return
 
         pid = uuid.UUID(project_id_str)
@@ -834,7 +822,9 @@ async def _send_event_pie_chart(
         state = await svc.get(query.message.chat_id)
 
         if state is None or state.flow != "events" or state.step != "detail":
-            await query.edit_message_text("❌ Session expired. Use /events to start again.")
+            await query.edit_message_text(
+                "❌ Session expired. Open the project's Events menu to start again."
+            )
             return
 
         payload = state.payload or {}
@@ -842,7 +832,9 @@ async def _send_event_pie_chart(
         event_name = payload.get("event_name")
 
         if not project_id_str or not event_name:
-            await query.edit_message_text("❌ Session expired. Use /events to start again.")
+            await query.edit_message_text(
+                "❌ Session expired. Open the project's Events menu to start again."
+            )
             return
 
         pid = uuid.UUID(project_id_str)
@@ -920,7 +912,9 @@ async def _send_full_pie_charts(query: CallbackQuery, owner_user_id: uuid.UUID) 
         state = await svc.get(query.message.chat_id)
 
         if state is None or state.flow != "events" or state.step != "detail":
-            await query.edit_message_text("❌ Session expired. Use /events to start again.")
+            await query.edit_message_text(
+                "❌ Session expired. Open the project's Events menu to start again."
+            )
             return
 
         payload = state.payload or {}
@@ -928,7 +922,9 @@ async def _send_full_pie_charts(query: CallbackQuery, owner_user_id: uuid.UUID) 
         event_name = payload.get("event_name")
 
         if not project_id_str or not event_name:
-            await query.edit_message_text("❌ Session expired. Use /events to start again.")
+            await query.edit_message_text(
+                "❌ Session expired. Open the project's Events menu to start again."
+            )
             return
 
         pid = uuid.UUID(project_id_str)

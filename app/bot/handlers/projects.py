@@ -16,7 +16,6 @@ from app.bot.handlers.events import show_events_menu, show_history_menu
 from app.bot.handlers.funnels import show_funnels_menu
 from app.bot.handlers.overview import update_overview_period
 from app.bot.handlers.reports import (
-    handle_report_project_pick,
     send_chart_photo,
     send_report_comparison,
     show_reports_menu,
@@ -199,10 +198,6 @@ async def project_callback(
             await send_report_comparison(
                 query, parts[0], owner_user_id, period=parts[1], gran=parts[2]
             )
-
-    elif data.startswith("rpt_pp:"):
-        project_id_str = data[7:]
-        await handle_report_project_pick(query, project_id_str, owner_user_id, ctx)
 
     elif data.startswith("menu:funnels:"):
         project_id_str = data[13:]
