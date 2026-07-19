@@ -45,6 +45,24 @@ def _isolate_ingestion_ratelimiter():
         ing._rate_last_access.clear()
 
 
+@pytest.fixture(autouse=True)
+def _rich_messages_fall_back(monkeypatch):
+    """Force reply_rich_html onto its plain-sendMessage fallback path.
+
+    Handler tests assert on the classic HTML text captured via mocked
+    ``reply_text``; a live sendRichMessage call would either hit the
+    network or "succeed" silently against a MagicMock bot. Tests that
+    exercise the rich path re-patch ``_call_send_rich_message`` locally.
+    """
+
+    async def _refuse(message, rich_html):
+        raise RuntimeError("sendRichMessage disabled in tests")
+
+    import app.bot.rich as rich
+
+    monkeypatch.setattr(rich, "_call_send_rich_message", _refuse)
+
+
 def make_test_app(overrides: dict | None = None) -> FastAPI:
     """Create a FastAPI app with test-safe environment overrides.
 

@@ -191,3 +191,61 @@ async def test_doctor_multi_project_mixed_states(session_factory, singleton_user
     assert "good.com" in text
     assert "bad.com" in text
     assert "2 issues detected" in text
+
+
+async def test_doctor_rich_variant_collapses_healthy(session_factory, singleton_user, monkeypatch):
+    """Rich message: healthy projects fold into <details>, broken stay expanded."""
+    from sqlalchemy import update as sql_update
+
+    import app.bot.rich as rich
+    from app.bot.handlers.doctor import doctor_command
+    from app.models.event import Event
+    from app.models.project import Project
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        good, _ = await create_project(
+            session,
+            name="good.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        await create_project(
+            session,
+            name="bad.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        await session.commit()
+
+        await session.execute(
+            sql_update(Project).where(Project.id == good.id).values(domain_allowlist=["good.com"])
+        )
+        session.add(
+            Event(
+                project_id=good.id,
+                event_name="pageview",
+                session_id="s1",
+                properties={},
+                timestamp=datetime.now(UTC) - timedelta(minutes=1),
+            )
+        )
+        await session.commit()
+
+    sent = {}
+
+    async def _record(message, rich_html):
+        sent["html"] = rich_html
+
+    monkeypatch.setattr(rich, "_call_send_rich_message", _record)
+
+    update, ctx = _make_message()
+    await doctor_command(update, ctx)
+
+    update.message.reply_text.assert_not_called()
+    html_out = sent["html"]
+    assert "<h4>🩺 Doctor — health report</h4>" in html_out
+    assert "<details><summary>✅ good.com</summary>" in html_out
+    assert "<details><summary>✅ bad.com" not in html_out
+    assert "bad.com" in html_out
+    assert "2 issues detected" in html_out

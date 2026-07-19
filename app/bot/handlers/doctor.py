@@ -20,6 +20,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from app.bot.auth import requires_user
+from app.bot.rich import reply_rich_html
 from app.models.event import Event
 from app.models.user import User
 from app.services.projects import list_projects
@@ -61,6 +62,8 @@ async def doctor_command(
 
     now = datetime.now(UTC)
     sections: list[str] = ["🩺 <b>Doctor — health report</b>", "─────────────────"]
+    # (project name, check lines, issue count) per project, for the rich variant.
+    checked: list[tuple[str, list[str], int]] = []
     issues = 0
 
     for project in projects:
@@ -75,30 +78,49 @@ async def doctor_command(
         last_seen: datetime | None = row.last_seen
 
         lines = [f"📊 <b>{html.escape(project.name)}</b>"]
+        project_issues = 0
 
         if total == 0:
             lines.append("  ❌ No events received yet")
-            issues += 1
+            project_issues += 1
         elif last_seen is None or (now - last_seen) > _STALE_THRESHOLD:
             lines.append(f"  ⚠️ Events: {total:,} (last {_relative(now, last_seen)} — stale)")
-            issues += 1
+            project_issues += 1
         else:
             lines.append(f"  ✅ Events: {total:,} (last {_relative(now, last_seen)})")
 
         allowlist = project.domain_allowlist or []
         if not allowlist:
             lines.append("  ⚠️ Origin allowlist: <b>open</b> — any site can POST events")
-            issues += 1
+            project_issues += 1
         else:
             label = ", ".join(allowlist)
             lines.append(f"  ✅ Origin allowlist: <code>{html.escape(label)}</code>")
 
+        issues += project_issues
+        checked.append((project.name, lines, project_issues))
         sections.append("\n".join(lines))
 
     sections.append("─────────────────")
     if issues == 0:
-        sections.append("✅ <b>All checks passed.</b>")
+        verdict = "✅ <b>All checks passed.</b>"
     else:
-        sections.append(f"⚠️ <b>{issues} issue{'s' if issues != 1 else ''} detected.</b>")
+        verdict = f"⚠️ <b>{issues} issue{'s' if issues != 1 else ''} detected.</b>"
+    sections.append(verdict)
+    fallback = "\n\n".join(sections)
 
-    await update.message.reply_text("\n\n".join(sections), parse_mode="HTML")
+    # Rich variant: projects with issues stay expanded; healthy ones
+    # collapse into <details> so problems are visible at a glance.
+    rich_parts = ["<h4>🩺 Doctor — health report</h4>"]
+    for name, lines, project_issues in checked:
+        if project_issues > 0:
+            rich_parts.append("\n".join(lines))
+        else:
+            rich_parts.append(
+                f"<details><summary>✅ {html.escape(name)}</summary>"
+                + "\n".join(lines[1:])
+                + "</details>"
+            )
+    rich_parts.append(verdict)
+
+    await reply_rich_html(update.message, "\n\n".join(rich_parts), fallback)

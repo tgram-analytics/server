@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import case, func, select
@@ -11,6 +12,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from app.bot.auth import requires_user
+from app.bot.rich import reply_rich_html
 from app.models.alert import Alert
 from app.models.event import Event
 from app.models.project import Project
@@ -29,12 +31,22 @@ def _format_delta(current: int, previous: int) -> str:
     return f"{arrow} {sign}{pct}%"
 
 
-async def _project_digest_lines(
+@dataclass
+class _ProjectDigest:
+    name: str
+    sessions_curr: int
+    sessions_prev: int
+    # (event_name, current-week count, previous-week count), sorted by count.
+    events: list[tuple[str, int, int]]
+    has_alerts: bool
+
+
+async def _project_digest(
     session: AsyncSession,
     project: Project,
     now: datetime,
-) -> list[str]:
-    """Return HTML lines describing the last-7-days digest for one project."""
+) -> _ProjectDigest:
+    """Collect the last-7-days digest numbers for one project."""
     week_ago = now - timedelta(days=7)
     two_weeks_ago = now - timedelta(days=14)
 
@@ -68,14 +80,8 @@ async def _project_digest_lines(
         ).scalars()
     )
 
-    lines = [
-        f"📦 <b>{html.escape(project.name)}</b>",
-        f"  👤 Sessions: <b>{sessions_curr:,}</b>  {_format_delta(sessions_curr, sessions_prev)}",
-    ]
-
     if not alerted_names:
-        lines.append("  💤 No alerts — set one with /alerts to track core events")
-        return lines
+        return _ProjectDigest(project.name, sessions_curr, sessions_prev, [], has_alerts=False)
 
     counts_rows = (
         await session.execute(
@@ -108,10 +114,40 @@ async def _project_digest_lines(
     rows = [(name, *counts.get(name, (0, 0))) for name in alerted_names]
     rows.sort(key=lambda r: (-r[1], r[0]))
 
-    for name, curr, prev in rows:
-        lines.append(f"  🎯 {html.escape(name)}: <b>{curr:,}</b>  {_format_delta(curr, prev)}")
+    return _ProjectDigest(project.name, sessions_curr, sessions_prev, rows, has_alerts=True)
 
+
+def _project_lines(d: _ProjectDigest) -> list[str]:
+    """Classic HTML lines for one project (sendMessage fallback)."""
+    lines = [
+        f"📦 <b>{html.escape(d.name)}</b>",
+        f"  👤 Sessions: <b>{d.sessions_curr:,}</b>"
+        f"  {_format_delta(d.sessions_curr, d.sessions_prev)}",
+    ]
+    if not d.has_alerts:
+        lines.append("  💤 No alerts — set one with /alerts to track core events")
+        return lines
+    for name, curr, prev in d.events:
+        lines.append(f"  🎯 {html.escape(name)}: <b>{curr:,}</b>  {_format_delta(curr, prev)}")
     return lines
+
+
+def _project_rich_section(d: _ProjectDigest) -> str:
+    """Rich-HTML section for one project: sub-heading + metrics table."""
+    rows = [
+        "<tr><th></th><th>7d</th><th>vs prev</th></tr>",
+        f"<tr><td>👤 Sessions</td><td><b>{d.sessions_curr:,}</b></td>"
+        f"<td>{_format_delta(d.sessions_curr, d.sessions_prev)}</td></tr>",
+    ]
+    for name, curr, prev in d.events:
+        rows.append(
+            f"<tr><td>🎯 {html.escape(name)}</td><td><b>{curr:,}</b></td>"
+            f"<td>{_format_delta(curr, prev)}</td></tr>"
+        )
+    section = [f"<h5>📦 {html.escape(d.name)}</h5>", f"<table>{''.join(rows)}</table>"]
+    if not d.has_alerts:
+        section.append("💤 No alerts — set one with /alerts to track core events")
+    return "\n".join(section)
 
 
 @requires_user
@@ -137,19 +173,24 @@ async def digest_command(
     week_ago = now - timedelta(days=7)
     period = f"{week_ago.strftime('%-d %b')} – {now.strftime('%-d %b')}"
 
+    subtitle = f"{period}  ·  {len(projects)} project{'s' if len(projects) != 1 else ''}"
+    digests = [await _project_digest(session, project, now) for project in projects]
+
     header = [
         "📰 <b>Weekly digest</b>",
-        f"<i>{period}  ·  {len(projects)} project{'s' if len(projects) != 1 else ''}</i>",
+        f"<i>{subtitle}</i>",
         "─────────────────",
     ]
-
     body: list[str] = []
-    for i, project in enumerate(projects):
+    for i, d in enumerate(digests):
         if i > 0:
             body.append("")
-        body.extend(await _project_digest_lines(session, project, now))
+        body.extend(_project_lines(d))
+    fallback = "\n".join(header + body)
 
-    await update.message.reply_text(
-        "\n".join(header + body),
-        parse_mode="HTML",
+    rich = "\n".join(
+        ["<h4>📰 Weekly digest</h4>", f"<i>{subtitle}</i>"]
+        + [_project_rich_section(d) for d in digests]
     )
+
+    await reply_rich_html(update.message, rich, fallback)
