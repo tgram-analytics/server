@@ -137,6 +137,13 @@ async def test_add_creates_project_and_shows_api_key(db_session, singleton_user)
     assert unique_name in reply_text
     assert "proj_" in reply_text  # api key shown once
 
+    # The key is queued for redaction, and can be hidden on demand.
+    from app.bot.key_redaction import pending_count
+
+    assert pending_count() == 1
+    markup = update.message.reply_text.call_args_list[0][1]["reply_markup"]
+    assert markup.inline_keyboard[-1][0].callback_data == "hidekey"
+
     # Verify the project row exists (committed data is visible across connections)
     await db_session.invalidate()
     result = await db_session.execute(

@@ -482,3 +482,38 @@ async def test_handle_set_retention_text_rejects_foreign_owner(session_factory, 
         )
         await session.execute(text("DELETE FROM users WHERE id = :i"), {"i": str(victim_id)})
         await session.commit()
+
+
+# ── API key rotation ──────────────────────────────────────────────────────────
+
+
+async def test_recreate_api_key_reveals_then_queues_redaction(session_factory, singleton_user):
+    """Rotation replaces the key, shows it once, and schedules its removal."""
+    from app.bot.handlers.settings import confirm_recreate_api_key
+    from app.bot.key_redaction import pending_count
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, old_key = await create_project(
+            session,
+            name="rotate-me.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        await session.commit()
+        pid = str(project.id)
+
+    query = MagicMock()
+    query.edit_message_text = AsyncMock()
+
+    await confirm_recreate_api_key(query, pid, singleton_user.id)
+
+    shown = query.edit_message_text.call_args[0][0]
+    assert "proj_" in shown
+    assert old_key not in shown  # a genuinely new key
+
+    assert pending_count() == 1
+    markup = query.edit_message_text.call_args[1]["reply_markup"]
+    assert markup.inline_keyboard[-1][0].callback_data == "hidekey"
+    # The pre-existing "Back to settings" row survives above it.
+    assert len(markup.inline_keyboard) == 2

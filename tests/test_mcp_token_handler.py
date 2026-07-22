@@ -61,6 +61,13 @@ async def test_mcp_token_new_creates_and_shows_raw_once(session_factory, singlet
     assert len(rows) == 1 and rows[0].label == "claude-desktop"
     assert rows[0].token_hash not in reply  # hash never shown
 
+    # The token is queued for redaction, and can be hidden on demand.
+    from app.bot.key_redaction import pending_count
+
+    assert pending_count() == 1
+    markup = update.message.reply_html.call_args[1]["reply_markup"]
+    assert markup.inline_keyboard[-1][0].callback_data == "hidekey"
+
 
 @pytest.mark.asyncio
 async def test_mcp_token_list_empty(session_factory, singleton_user):

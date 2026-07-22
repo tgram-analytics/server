@@ -442,10 +442,24 @@ async def confirm_recreate_api_key(
             ]
         ]
     )
-    await query.edit_message_text(
+    from app.bot.key_redaction import schedule_redaction, with_hide_button
+
+    text = (
         "🔑 <b>New API key generated.</b>\n\n"
-        "⚠️ Save it now — it won't be shown again.\n\n"
-        f"<b>Env:</b>\n<tg-spoiler><pre>{env_block}</pre></tg-spoiler>",
-        parse_mode="HTML",
-        reply_markup=keyboard,
+        "⚠️ Save it now — it's masked in this message in a few minutes "
+        "and can't be shown again.\n\n"
+        f"<b>Env:</b>\n<tg-spoiler><pre>{env_block}</pre></tg-spoiler>"
     )
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=with_hide_button(keyboard),
+    )
+    if query.message is not None:
+        schedule_redaction(
+            query.get_bot(),
+            query.message.chat.id,
+            query.message.message_id,
+            text,
+            reply_markup=keyboard,
+        )

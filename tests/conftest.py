@@ -63,6 +63,23 @@ def _rich_messages_fall_back(monkeypatch):
     monkeypatch.setattr(rich, "_call_send_rich_message", _refuse)
 
 
+@pytest.fixture(autouse=True)
+def _cancel_pending_key_redactions():
+    """Drop timers left behind by handlers that reveal a secret.
+
+    ``schedule_redaction`` spawns a long-sleeping asyncio task per revealed
+    key. Without this, every handler test that creates a project or token
+    leaves one pending at loop teardown.
+    """
+    from app.bot.key_redaction import cancel_pending
+
+    cancel_pending()
+    try:
+        yield
+    finally:
+        cancel_pending()
+
+
 def make_test_app(overrides: dict | None = None) -> FastAPI:
     """Create a FastAPI app with test-safe environment overrides.
 

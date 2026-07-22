@@ -43,10 +43,15 @@ async def mcp_token_command(
         from app.core.config import get_settings
 
         base = get_settings().mcp_effective_public_url
-        await update.message.reply_html(
-            "🔑 <b>MCP token created</b> — shown once, store it now:\n\n"
+        from app.bot.key_redaction import schedule_redaction, with_hide_button
+
+        text = (
+            "🔑 <b>MCP token created</b> — store it now, it's masked in this "
+            "message in a few minutes:\n\n"
             f"<code>{raw}</code>" + _CONNECT_HINT.format(base=escape(base), token=raw)
         )
+        sent = await update.message.reply_html(text, reply_markup=with_hide_button(None))
+        schedule_redaction(ctx.bot, sent.chat_id, sent.message_id, text)
         return
 
     rows = await svc.list_tokens(session, user_id=user.id)

@@ -85,7 +85,8 @@ def _js_snippet(server_url: str) -> str:
         "Or drop in a script tag:\n"
         f"<pre>&lt;script src=&quot;{server_url}/sdk/tga.min.js&quot;&gt;&lt;/script&gt;</pre>\n\n"
         "💡 Replace <code>&lt;YOUR_API_KEY&gt;</code> with the <code>proj_…</code> "
-        "key from the project-creation message above.\n\n"
+        "key from the project-creation message above — once it's masked there, "
+        "generate a fresh one in project Settings.\n\n"
         "📚 Full docs: github.com/tgram-analytics/tgram-analytics-js"
     )
 

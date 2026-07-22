@@ -131,11 +131,25 @@ async def project_request_callback(
     base = settings.webhook_base_url.rstrip("/") or "https://your-server.com"
     env_block = f"TGA_URL={base}\nTGA_API_KEY={api_key}"
 
-    await query.edit_message_text(
+    from app.bot.key_redaction import schedule_redaction, with_hide_button
+
+    text = (
         f"✅ Project <b>{html.escape(name)}</b> created (requested by your AI agent)!\n\n"
-        f"⚠️ Save this key — it won't be shown again.\n\n"
+        f"⚠️ Save this key now — it's masked in this message in a few "
+        f"minutes and can't be shown again.\n\n"
         f"<b>Env:</b>\n<tg-spoiler><pre>{env_block}</pre></tg-spoiler>\n\n"
         f"Your agent can now see this project over MCP. If it needs the API key "
-        f"itself, it will call rotate_api_key (which replaces the key above).",
-        parse_mode="HTML",
+        f"itself, it will call rotate_api_key (which replaces the key above)."
     )
+    await query.edit_message_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=with_hide_button(None),
+    )
+    if query.message is not None:
+        schedule_redaction(
+            query.get_bot(),
+            query.message.chat.id,
+            query.message.message_id,
+            text,
+        )
