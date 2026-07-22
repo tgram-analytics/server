@@ -45,6 +45,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     from app.bot.handlers.project_requests import project_request_callback
     from app.bot.handlers.projects import add_command, project_callback, projects_command
     from app.bot.handlers.system import cancel_command, help_command, start_command
+    from app.bot.key_redaction import HIDE_PATTERN, hide_key_callback
 
     # Defense-in-depth: every handler is also wrapped with ``@requires_user``
     # which resolves the current ``User`` and short-circuits unauthorised
@@ -96,6 +97,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     app.add_handler(CallbackQueryHandler(onboarding_callback, pattern=r"^onb:"))
     app.add_handler(CallbackQueryHandler(mcp_token_callback, pattern=r"^mcptok:"))
     app.add_handler(CallbackQueryHandler(project_request_callback, pattern=r"^pcr:"))
+    app.add_handler(CallbackQueryHandler(hide_key_callback, pattern=HIDE_PATTERN))
     app.add_handler(CallbackQueryHandler(project_callback))
 
     # Text messages for multi-step conversation flows (e.g., add-alert)

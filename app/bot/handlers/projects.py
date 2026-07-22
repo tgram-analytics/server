@@ -88,15 +88,28 @@ async def add_command(
     )
 
     from app.bot.handlers.onboarding import post_create_keyboard
+    from app.bot.key_redaction import schedule_redaction, with_hide_button
 
-    await update.message.reply_text(
+    text = (
         f"✅ Project <b>{html.escape(name)}</b> created!\n\n"
-        f"⚠️ Save this key — it won't be shown again.\n\n"
+        f"⚠️ Save this key now — it's masked in this message in a few "
+        f"minutes and can't be shown again.\n\n"
         f"<b>Env:</b>\n<tg-spoiler><pre>{env_block}</pre></tg-spoiler>\n\n"
         f"<b>Test it now (curl):</b>\n<pre>{snippet}</pre>\n\n"
-        f"Or pick your stack 👇",
+        f"Or pick your stack 👇"
+    )
+    keyboard = post_create_keyboard(project.id)
+    sent = await update.message.reply_text(
+        text,
         parse_mode="HTML",
-        reply_markup=post_create_keyboard(project.id),
+        reply_markup=with_hide_button(keyboard),
+    )
+    schedule_redaction(
+        ctx.bot,
+        sent.chat_id,
+        sent.message_id,
+        text,
+        reply_markup=keyboard,
     )
 
     # Immediately prompt for the domain allowlist for this fresh project.

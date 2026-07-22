@@ -26,6 +26,8 @@ from app.extensions import ExtensionError
 ADMIN_ID = 111
 REQUEST_ID = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
 PROJECT_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+# Shaped like a real key (proj_ + 64 hex) so the redaction path engages.
+FAKE_API_KEY = "proj_" + "ab" * 32
 
 
 @pytest.fixture(autouse=True)
@@ -122,7 +124,7 @@ async def test_approve_creates_project_and_shows_key(
     monkeypatch.setattr(handler_mod, "get_request", AsyncMock(return_value=row))
     monkeypatch.setattr(handler_mod, "is_expired", MagicMock(return_value=False))
     project = SimpleNamespace(id=PROJECT_ID, name="agent-app")
-    create_mock = AsyncMock(return_value=(project, "plainkey123"))
+    create_mock = AsyncMock(return_value=(project, FAKE_API_KEY))
     monkeypatch.setattr(handler_mod, "create_project", create_mock)
 
     update, ctx, query = _make_callback(f"pcr:yes:{REQUEST_ID}")
@@ -146,7 +148,14 @@ async def test_approve_creates_project_and_shows_key(
     query.edit_message_text.assert_called_once()
     text = query.edit_message_text.call_args[0][0]
     assert "created" in text
-    assert "plainkey123" in text
+    assert FAKE_API_KEY in text
+
+    # The key is queued for redaction, and can be hidden on demand.
+    from app.bot.key_redaction import pending_count
+
+    assert pending_count() == 1
+    markup = query.edit_message_text.call_args[1]["reply_markup"]
+    assert markup.inline_keyboard[-1][0].callback_data == "hidekey"
 
 
 async def test_reject_resolves_without_creating(monkeypatch, mock_session, claim_mock):
@@ -262,7 +271,7 @@ async def test_double_tap_approve_already_claimed(monkeypatch, mock_session, cla
     monkeypatch.setattr(handler_mod, "is_expired", MagicMock(return_value=False))
     project = SimpleNamespace(id=PROJECT_ID, name="agent-app")
     monkeypatch.setattr(
-        handler_mod, "create_project", AsyncMock(return_value=(project, "plainkey123"))
+        handler_mod, "create_project", AsyncMock(return_value=(project, FAKE_API_KEY))
     )
     claim_mock.side_effect = None
     claim_mock.return_value = False
