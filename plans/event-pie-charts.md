@@ -82,9 +82,7 @@ All later phases assume cwd is `server-event-pie-charts/`.
    ```
 5. Add a stub function at the bottom of the "── Pie chart ──" section:
    ```python
-   async def _send_full_pie_charts(
-       query: CallbackQuery, owner_user_id: uuid.UUID
-   ) -> None:
+   async def _send_full_pie_charts(query: CallbackQuery, owner_user_id: uuid.UUID) -> None:
        """Generate one pie chart per property for the current event."""
        await query.answer("Full Pie Charts coming online…", show_alert=False)
    ```

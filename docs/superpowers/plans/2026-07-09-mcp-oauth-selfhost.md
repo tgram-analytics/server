@@ -598,9 +598,7 @@ async def _user(session) -> User:
 
 @pytest.mark.asyncio
 async def test_register_client_roundtrip(db_session):
-    client = await svc.register_client(
-        db_session, client_name="Claude", redirect_uris=[REDIRECT]
-    )
+    client = await svc.register_client(db_session, client_name="Claude", redirect_uris=[REDIRECT])
     assert client.client_id
     found = await svc.get_client(db_session, client.client_id)
     assert found is not None and found.redirect_uris == [REDIRECT]
@@ -667,9 +665,7 @@ async def test_exchange_code_single_use(db_session):
         redirect_uri=REDIRECT,
         code_challenge=s256_challenge("v"),
     )
-    kwargs = dict(
-        code=code, client_id=client.client_id, redirect_uri=REDIRECT, code_verifier="v"
-    )
+    kwargs = dict(code=code, client_id=client.client_id, redirect_uri=REDIRECT, code_verifier="v")
     assert await svc.exchange_code(db_session, **kwargs) is not None
     assert await svc.exchange_code(db_session, **kwargs) is None  # second use dead
 
@@ -759,9 +755,7 @@ async def register_client(
     return client
 
 
-async def get_client(
-    session: AsyncSession, client_id: str
-) -> MCPSelfhostOAuthClient | None:
+async def get_client(session: AsyncSession, client_id: str) -> MCPSelfhostOAuthClient | None:
     result = await session.execute(
         select(MCPSelfhostOAuthClient).where(MCPSelfhostOAuthClient.client_id == client_id)
     )
@@ -785,8 +779,7 @@ async def mint_code(
             client_id=client_id,
             redirect_uri=redirect_uri,
             code_challenge=code_challenge,
-            expires_at=expires_at
-            or datetime.now(UTC) + timedelta(seconds=CODE_TTL_SECONDS),
+            expires_at=expires_at or datetime.now(UTC) + timedelta(seconds=CODE_TTL_SECONDS),
         )
     )
     await session.flush()
@@ -920,9 +913,7 @@ def render_authorize_page(
 ) -> str:
     host = urlparse(redirect_uri).netloc or redirect_uri
     err_html = (
-        '<p class="err">That didn&#39;t work — check the token and try again.</p>'
-        if error
-        else ""
+        '<p class="err">That didn&#39;t work — check the token and try again.</p>' if error else ""
     )
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Authorize MCP access</title>
@@ -975,9 +966,7 @@ async def test_sends_message_with_revoke_button():
     bot = MagicMock()
     bot.send_message = AsyncMock()
     with patch("app.bot.setup.get_bot", return_value=bot):
-        await notify_token_issued(
-            admin_chat_id=42, client_name="Claude", token_id="abc-123"
-        )
+        await notify_token_issued(admin_chat_id=42, client_name="Claude", token_id="abc-123")
     kwargs = bot.send_message.call_args.kwargs
     assert kwargs["chat_id"] == 42
     assert "Claude" in kwargs["text"]
@@ -1015,9 +1004,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 logger = logging.getLogger("app.mcp.oauth")
 
 
-async def notify_token_issued(
-    *, admin_chat_id: int, client_name: str, token_id: str
-) -> None:
+async def notify_token_issued(*, admin_chat_id: int, client_name: str, token_id: str) -> None:
     try:
         from app.bot.setup import get_bot
 
@@ -1175,9 +1162,7 @@ async def test_full_flow_issues_working_derived_token(oauth_client, seeded, sess
     user_id, master = seeded
     cid = await _register(oauth_client)
     challenge = s256_challenge("verifier-1")
-    page = await oauth_client.get(
-        "/mcp/oauth/authorize", params=_authorize_params(cid, challenge)
-    )
+    page = await oauth_client.get("/mcp/oauth/authorize", params=_authorize_params(cid, challenge))
     csrf = _extract_csrf(page.text)
 
     with patch("app.mcp.oauth.router.notify_token_issued", new=AsyncMock()) as notify:
@@ -1214,9 +1199,7 @@ async def test_authorize_post_bad_token_no_code(oauth_client, seeded):
     _, _master = seeded
     cid = await _register(oauth_client)
     challenge = s256_challenge("v")
-    page = await oauth_client.get(
-        "/mcp/oauth/authorize", params=_authorize_params(cid, challenge)
-    )
+    page = await oauth_client.get("/mcp/oauth/authorize", params=_authorize_params(cid, challenge))
     csrf = _extract_csrf(page.text)
     r = await _post_authorize(oauth_client, cid, "mcp_" + "0" * 64, challenge, csrf)
     assert r.status_code == 200  # re-rendered page, no redirect
@@ -1237,9 +1220,7 @@ async def test_token_rejects_wrong_verifier_and_replay(oauth_client, seeded):
     _, master = seeded
     cid = await _register(oauth_client)
     challenge = s256_challenge("good")
-    page = await oauth_client.get(
-        "/mcp/oauth/authorize", params=_authorize_params(cid, challenge)
-    )
+    page = await oauth_client.get("/mcp/oauth/authorize", params=_authorize_params(cid, challenge))
     csrf = _extract_csrf(page.text)
     with patch("app.mcp.oauth.router.notify_token_issued", new=AsyncMock()):
         r = await _post_authorize(oauth_client, cid, master, challenge, csrf)
@@ -1556,17 +1537,15 @@ async def _boot_server(
 - [ ] **Step 10.3: Implement mount.** In `app/main.py`, immediately after the existing `if settings.mcp_enabled and not plugin_owns_mcp:` block (inside it, after `await stack.enter_async_context(mcp_lifespan(app))`), add:
 
 ```python
-            # Self-host OAuth for header-less MCP clients (Claude Desktop).
-            # Only when the DEFAULT verifier is in use: a plugin-registered
-            # verifier (cloud overlay) brings its own OAuth and well-known.
-            if settings.mcp_oauth_enabled and get_mcp_token_verifier() is None:
-                from app.mcp.oauth.router import build_oauth_router
-                from app.mcp.well_known import build_well_known_router
+# Self-host OAuth for header-less MCP clients (Claude Desktop).
+# Only when the DEFAULT verifier is in use: a plugin-registered
+# verifier (cloud overlay) brings its own OAuth and well-known.
+if settings.mcp_oauth_enabled and get_mcp_token_verifier() is None:
+    from app.mcp.oauth.router import build_oauth_router
+    from app.mcp.well_known import build_well_known_router
 
-                app.include_router(build_oauth_router(), prefix="/mcp/oauth")
-                app.include_router(
-                    build_well_known_router(public_url=settings.mcp_effective_public_url)
-                )
+    app.include_router(build_oauth_router(), prefix="/mcp/oauth")
+    app.include_router(build_well_known_router(public_url=settings.mcp_effective_public_url))
 ```
 
 (`get_mcp_token_verifier` is already imported in that block.)
@@ -1597,12 +1576,13 @@ async def favicon() -> Response:
 - [ ] **Step 10.5: /mcp copy.** In `app/bot/handlers/mcp.py`, replace the "Claude Desktop / Cursor: add an HTTP MCP server..." sentence in the self-host reply with:
 
 ```python
-        "Claude Desktop: Settings → Connectors → <b>Add custom connector</b>, "
-        f"URL <code>{esc}</code> — a browser page opens; paste a token from "
-        "/mcp_token there.\n"
-        "Cursor: add an HTTP MCP server with URL "
-        f"<code>{esc}</code> and header "
-        "<code>Authorization: Bearer YOUR_TOKEN</code>.\n\n"
+"Claude Desktop: Settings → Connectors → <b>Add custom connector</b>,"
+
+f"URL <code>{esc}</code> — a browser page opens; paste a token from "
+"/mcp_token there.\n"
+"Cursor: add an HTTP MCP server with URL "
+f"<code>{esc}</code> and header "
+"<code>Authorization: Bearer YOUR_TOKEN</code>.\n\n"
 ```
 
 Check `tests/test_mcp_command_handler.py` still passes (it asserts on URL + `/mcp_token new` + `--transport http`, all still present).
@@ -1646,8 +1626,8 @@ Note: `app_client` has `follow_redirects=True` client-wide; per-request `follow_
 - [ ] **Step 11.3: Implement.** In `tests/mcp/conftest.py` `_boot_server`, extend `uvicorn.Config(...)` with:
 
 ```python
-        proxy_headers=True,
-        forwarded_allow_ips="*",
+proxy_headers = (True,)
+forwarded_allow_ips = ("*",)
 ```
 
 In `Dockerfile` line 43, change the exec tail from:
