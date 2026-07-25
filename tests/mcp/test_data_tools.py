@@ -325,6 +325,191 @@ async def test_top_pages_cross_user_403(
     top_mock.assert_not_awaited()
 
 
+# ── top_property_values ───────────────────────────────────────────────────────
+
+
+async def test_top_property_values_happy_path(
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    monkeypatch,
+    patch_open_session,
+    user_a_id,
+    project_a_id,
+):
+    project = _project_obj(project_a_id, owner=user_a_id)
+    monkeypatch.setattr(
+        "app.services.projects.get_project",
+        AsyncMock(return_value=project),
+    )
+    rows = [
+        {"value": "too_expensive", "count": 8},
+        {"value": "just_looking", "count": 4},
+    ]
+    top_mock = AsyncMock(return_value=rows)
+    monkeypatch.setattr("app.services.analytics.top_properties", top_mock)
+
+    from tests.mcp.conftest import _make_token
+
+    with set_auth_token(_make_token(user_a_id)):
+        result = await call_tool(
+            fresh_mcp,
+            "top_property_values",
+            project_id=str(project_a_id),
+            event_name="abandon_reason",
+            property_key="reason",
+            period="30d",
+            limit=5,
+        )
+
+    assert isinstance(result, dict)
+    assert result["event_name"] == "abandon_reason"
+    assert result["property_key"] == "reason"
+    assert result["values"] == rows
+    assert result["period"] == "30d"
+    kwargs = top_mock.await_args.kwargs
+    assert kwargs["event_name"] == "abandon_reason"
+    assert kwargs["property_key"] == "reason"
+    assert kwargs["limit"] == 5
+
+
+async def test_top_property_values_missing_key(
+    fresh_mcp, call_tool, set_auth_token, user_a_id, project_a_id
+):
+    from tests.mcp.conftest import _make_token
+
+    with set_auth_token(_make_token(user_a_id)):
+        result = await call_tool(
+            fresh_mcp,
+            "top_property_values",
+            project_id=str(project_a_id),
+            event_name="abandon_reason",
+            property_key="",
+        )
+    assert isinstance(result, list)
+    assert result[0].isError is True
+    assert "property_key" in result[0].text
+
+
+async def test_top_property_values_invalid_limit(
+    fresh_mcp, call_tool, set_auth_token, user_a_id, project_a_id
+):
+    from tests.mcp.conftest import _make_token
+
+    with set_auth_token(_make_token(user_a_id)):
+        result = await call_tool(
+            fresh_mcp,
+            "top_property_values",
+            project_id=str(project_a_id),
+            event_name="abandon_reason",
+            property_key="reason",
+            limit=0,
+        )
+    assert isinstance(result, list)
+    assert result[0].isError is True
+    assert "invalid limit" in result[0].text
+
+
+async def test_top_property_values_cross_user_403(
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    monkeypatch,
+    patch_open_session,
+    user_b_id,
+    project_a_id,
+):
+    monkeypatch.setattr(
+        "app.services.projects.get_project",
+        AsyncMock(return_value=None),
+    )
+    top_mock = AsyncMock(return_value=[])
+    monkeypatch.setattr("app.services.analytics.top_properties", top_mock)
+
+    from tests.mcp.conftest import _make_token
+
+    with set_auth_token(_make_token(user_b_id)):
+        result = await call_tool(
+            fresh_mcp,
+            "top_property_values",
+            project_id=str(project_a_id),
+            event_name="abandon_reason",
+            property_key="reason",
+        )
+    assert isinstance(result, list)
+    assert result[0].isError is True
+    top_mock.assert_not_awaited()
+
+
+# ── list_property_keys ────────────────────────────────────────────────────────
+
+
+async def test_list_property_keys_happy_path(
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    monkeypatch,
+    patch_open_session,
+    user_a_id,
+    project_a_id,
+):
+    project = _project_obj(project_a_id, owner=user_a_id)
+    monkeypatch.setattr(
+        "app.services.projects.get_project",
+        AsyncMock(return_value=project),
+    )
+    keys = ["reason", "plan", "discount_shown"]
+    keys_mock = AsyncMock(return_value=keys)
+    monkeypatch.setattr("app.services.analytics.list_property_keys", keys_mock)
+
+    from tests.mcp.conftest import _make_token
+
+    with set_auth_token(_make_token(user_a_id)):
+        result = await call_tool(
+            fresh_mcp,
+            "list_property_keys",
+            project_id=str(project_a_id),
+            event_name="abandon_reason",
+            period="30d",
+        )
+
+    assert isinstance(result, dict)
+    assert result["event_name"] == "abandon_reason"
+    assert result["keys"] == keys
+    assert result["period"] == "30d"
+    assert keys_mock.await_args.kwargs["event_name"] == "abandon_reason"
+
+
+async def test_list_property_keys_cross_user_403(
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    monkeypatch,
+    patch_open_session,
+    user_b_id,
+    project_a_id,
+):
+    monkeypatch.setattr(
+        "app.services.projects.get_project",
+        AsyncMock(return_value=None),
+    )
+    keys_mock = AsyncMock(return_value=[])
+    monkeypatch.setattr("app.services.analytics.list_property_keys", keys_mock)
+
+    from tests.mcp.conftest import _make_token
+
+    with set_auth_token(_make_token(user_b_id)):
+        result = await call_tool(
+            fresh_mcp,
+            "list_property_keys",
+            project_id=str(project_a_id),
+            event_name="abandon_reason",
+        )
+    assert isinstance(result, list)
+    assert result[0].isError is True
+    keys_mock.assert_not_awaited()
+
+
 # ── recent_events ───────────────────────────────────────────────────────────
 
 

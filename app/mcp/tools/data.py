@@ -8,6 +8,9 @@ Four handlers, all project-scoped (every one calls
 - ``compare_periods`` — current-period count vs. immediately-prior period
   + percent delta.
 - ``top_pages`` — top URLs from ``pageview`` events.
+- ``top_property_values`` — top values of any JSONB property for any event
+  (the generalisation of ``top_pages``).
+- ``list_property_keys`` — which JSONB property keys an event carries.
 - ``recent_events`` — most-recent N events (newest first).
 """
 
@@ -33,12 +36,15 @@ from app.mcp.tools._periods import (
 )
 from app.mcp.tools._schemas import (
     ComparePeriodsResult,
+    PropertyKeysResult,
+    PropertyValueRow,
     QueryEventsResult,
     RecentEventRow,
     RecentEventsResult,
     TimeBucket,
     TopPagesResult,
     TopPagesRow,
+    TopPropertyValuesResult,
 )
 from app.mcp.tools._session import open_session
 
@@ -262,6 +268,124 @@ def register_data_tools(mcp: FastMCP) -> None:
             pages=[TopPagesRow(value=r["value"], count=r["count"]) for r in rows],
             period=period,
         )
+
+    @mcp.tool(title="Top property values", annotations=_READ_ONLY)
+    async def top_property_values(
+        project_id: str,
+        event_name: str,
+        property_key: str,
+        period: str = "7d",
+        limit: int = 10,
+    ) -> list[TextContent] | TopPropertyValuesResult:
+        """Return the top values of a JSONB *property_key* for *event_name*.
+
+        The generalisation of ``top_pages`` to any event + property: e.g.
+        the top ``reason`` values for ``abandon_reason`` events, or the top
+        ``plan`` values for ``checkout_started``. Only events that carry the
+        key are counted. Results are sorted by count desc.
+
+        Response: ``{"event_name", "property_key",
+        "values": [{"value": str, "count": int}, ...], "period"}``.
+        """
+        token = get_access_token()
+        if token is None or not isinstance(token, MCPAccessToken):
+            return _not_authenticated()
+
+        try:
+            pid = uuid.UUID(project_id)
+        except (ValueError, AttributeError):
+            return _bad_input(f"invalid project_id {project_id!r}; must be a UUID")
+
+        if not property_key or not isinstance(property_key, str):
+            return _bad_input("property_key is required and must be a non-empty string")
+
+        if not isinstance(limit, int) or limit <= 0 or limit > 100:
+            return _bad_input(f"invalid limit {limit!r}; must be 1..100")
+
+        try:
+            start, end = period_to_window(period)
+        except InvalidPeriodError as exc:
+            return _bad_input(str(exc))
+
+        owner_user_id = uuid.UUID(token.extra["user_id"])
+
+        from app.services.analytics import top_properties
+
+        async with open_session() as session:
+            try:
+                await assert_project_owned_by(session, pid, owner_user_id)
+            except ProjectNotOwnedError:
+                return _not_owned_error(project_id)
+
+            rows = await top_properties(
+                session,
+                project_id=pid,
+                event_name=event_name,
+                property_key=property_key,
+                start=start,
+                end=end,
+                limit=limit,
+            )
+
+        return TopPropertyValuesResult(
+            event_name=event_name,
+            property_key=property_key,
+            values=[PropertyValueRow(value=r["value"], count=r["count"]) for r in rows],
+            period=period,
+        )
+
+    @mcp.tool(title="List property keys", annotations=_READ_ONLY)
+    async def list_property_keys(
+        project_id: str,
+        event_name: str,
+        period: str = "7d",
+        limit: int = 50,
+    ) -> list[TextContent] | PropertyKeysResult:
+        """Return which JSONB property keys *event_name* carries in *period*.
+
+        Use this to discover what's available before calling
+        ``top_property_values``. Keys are ordered by frequency (most common
+        first) and only include keys seen at least once in the window.
+
+        Response: ``{"event_name", "keys": [str, ...], "period"}``.
+        """
+        token = get_access_token()
+        if token is None or not isinstance(token, MCPAccessToken):
+            return _not_authenticated()
+
+        try:
+            pid = uuid.UUID(project_id)
+        except (ValueError, AttributeError):
+            return _bad_input(f"invalid project_id {project_id!r}; must be a UUID")
+
+        if not isinstance(limit, int) or limit <= 0 or limit > 100:
+            return _bad_input(f"invalid limit {limit!r}; must be 1..100")
+
+        try:
+            start, end = period_to_window(period)
+        except InvalidPeriodError as exc:
+            return _bad_input(str(exc))
+
+        owner_user_id = uuid.UUID(token.extra["user_id"])
+
+        from app.services.analytics import list_property_keys as svc_list_property_keys
+
+        async with open_session() as session:
+            try:
+                await assert_project_owned_by(session, pid, owner_user_id)
+            except ProjectNotOwnedError:
+                return _not_owned_error(project_id)
+
+            keys = await svc_list_property_keys(
+                session,
+                project_id=pid,
+                event_name=event_name,
+                start=start,
+                end=end,
+                limit=limit,
+            )
+
+        return PropertyKeysResult(event_name=event_name, keys=keys, period=period)
 
     @mcp.tool(title="Recent events", annotations=_READ_ONLY)
     async def recent_events(
