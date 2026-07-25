@@ -379,8 +379,10 @@ To add new env vars to `Settings`, subclass it in your plugin and monkey-patch t
 # my_plugin/__init__.py
 from app.core import config as app_config
 
+
 class ExtendedSettings(app_config.Settings):
     my_extra_var: str = "default"
+
 
 def register() -> None:
     app_config.Settings = ExtendedSettings  # type: ignore[misc]
