@@ -141,6 +141,34 @@ class RecentEventsResult(BaseModel):
     events: list[RecentEventRow]
 
 
+class PropertyValueRow(BaseModel):
+    """One row of :func:`top_property_values` — a distinct value + its count."""
+
+    value: str | None
+    count: int
+
+
+class TopPropertyValuesResult(BaseModel):
+    """Result of :func:`top_property_values`.
+
+    The generalisation of :func:`top_pages` to any event + JSONB property
+    key: e.g. the top ``reason`` values for ``abandon_reason`` events.
+    """
+
+    event_name: str
+    property_key: str
+    values: list[PropertyValueRow]
+    period: str
+
+
+class PropertyKeysResult(BaseModel):
+    """Result of :func:`list_property_keys` — which property keys an event carries."""
+
+    event_name: str
+    keys: list[str]
+    period: str
+
+
 # ─── Setup / docs ────────────────────────────────────────────────────────────
 
 
@@ -244,6 +272,9 @@ __all__ = [
     "TopPagesResult",
     "RecentEventRow",
     "RecentEventsResult",
+    "PropertyValueRow",
+    "TopPropertyValuesResult",
+    "PropertyKeysResult",
     "VerifyIntegrationResult",
     "IntegrationGuideResult",
     "SDKSnippetResult",
