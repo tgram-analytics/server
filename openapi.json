@@ -16,13 +16,23 @@
       },
       "HealthResponse": {
         "properties": {
+          "commit": {
+            "title": "Commit",
+            "type": "string"
+          },
           "status": {
             "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
             "type": "string"
           }
         },
         "required": [
-          "status"
+          "status",
+          "version",
+          "commit"
         ],
         "title": "HealthResponse",
         "type": "object"
@@ -547,7 +557,7 @@
     },
     "/health": {
       "get": {
-        "description": "Return ``{\"status\": \"ok\"}`` when the server is running.",
+        "description": "Return status, installed package version, and deployed commit SHA.",
         "operationId": "health_health_get",
         "responses": {
           "200": {
