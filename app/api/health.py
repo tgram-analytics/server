@@ -1,5 +1,9 @@
 """Health check endpoint."""
 
+import os
+import subprocess
+from importlib.metadata import PackageNotFoundError, version
+
 from fastapi import APIRouter
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -9,12 +13,44 @@ router = APIRouter()
 
 class HealthResponse(BaseModel):
     status: str
+    version: str
+    commit: str
+
+
+def _server_version() -> str:
+    try:
+        return version("tgram-analytics-server")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def _git_commit() -> str:
+    """Deployed commit SHA.
+
+    Prefers the ``GIT_SHA`` build-time env var (set by the Docker build via
+    ``--build-arg GIT_SHA=$(git rev-parse HEAD)``) since production images
+    don't ship a ``.git`` dir. Falls back to reading the local repo for dev.
+    """
+    env_sha = os.environ.get("GIT_SHA")
+    if env_sha:
+        return env_sha
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=True,
+        )
+        return result.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
 
 
 @router.get("/health", response_model=HealthResponse, tags=["health"])
 async def health() -> HealthResponse:
-    """Return ``{"status": "ok"}`` when the server is running."""
-    return HealthResponse(status="ok")
+    """Return status, installed package version, and deployed commit SHA."""
+    return HealthResponse(status="ok", version=_server_version(), commit=_git_commit())
 
 
 _FAVICON_SVG = (
