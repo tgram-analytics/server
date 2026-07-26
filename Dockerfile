@@ -17,6 +17,9 @@ RUN pip install --no-cache-dir --upgrade pip \
 # ─── Runtime stage ────────────────────────────────────────────────────────────
 FROM python:3.12-slim AS runtime
 
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}
+
 WORKDIR /app
 
 # Runtime system deps
