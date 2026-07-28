@@ -8,6 +8,40 @@
 [![License: FSL-1.1-ALv2](https://img.shields.io/badge/License-FSL--1.1--ALv2-blue.svg)](LICENSE)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](https://www.python.org/)
 
+<!-- SCREENSHOT: replace this comment with a real Telegram ping, e.g.
+     ![A sale alert arriving in Telegram](docs/img/telegram-ping.png) -->
+
+---
+
+## Why this exists
+
+I ship a lot of small projects, and checking a dashboard for each one doesn't
+scale — I'd just stop looking. I already live in Telegram all day, so I made
+the projects report to me there instead.
+
+What that turns into in practice:
+
+- **Milestone nudges, not noise.** A ping on a new sale, or every 10th / 100th
+  signup — the events that actually tell you something changed.
+- **Every project in one chat.** One bot, one place you already check.
+- **Charts when you want to dig.** Per-event reports, multi-project overview,
+  funnels and breakdowns, a weekly digest with week-over-week deltas.
+- **Queryable by your AI agent.** The built-in [MCP endpoint](#connect-claude-mcp)
+  lets Claude Code, Claude Desktop, or Cursor read your analytics — so you can
+  cross-reference them with other data (Search Console, for instance) and ask
+  what to fix next, instead of eyeballing charts yourself.
+- **Privacy-first by construction.** No cookies, no fingerprinting, raw IPs and
+  User-Agents never persisted. See [Privacy posture](#privacy-posture).
+
+No account, no dashboard, no credit card: message the bot, get a project key,
+call `track()`.
+
+## What it is not
+
+Not a Google Analytics replacement for a large org. It's built for solo devs
+and small teams shipping several projects at once. Attribution modelling,
+session replay, and multi-seat team management are out of scope.
+
 ---
 
 ## Quick start
@@ -440,13 +474,16 @@ Please follow the existing code style (ruff-enforced) and keep PRs focused.
 ---
 
 ## Disclaimer
-> This project is an independent open-source project, not affiliated
+> This is an independent project, not affiliated
 > with or endorsed by Telegram Messenger LLP or its parent company in any way.
 > "Telegram" is a trademark of Telegram Messenger LLP.
 
 ## License
 
 [Functional Source License, Version 1.1, ALv2 Future License (FSL-1.1-ALv2)](LICENSE).
+
+To be precise about the terms: FSL is **source-available, not an OSI-approved
+open-source licence** — it carries a competing-use restriction for two years.
 
 In plain language:
 
