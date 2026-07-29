@@ -14,7 +14,7 @@ Apache License 2.0.
 
 ## What lives where
 
-- **This repo** (`tgram-analytics/server`) — open source under FSL-1.1-ALv2.
+- **This repo** (`tgram-analytics/server`) — source-available under FSL-1.1-ALv2.
   The ingestion API, the Telegram bot handlers for reports/alerts/funnels, the
   models, the schemas. Self-hosters get 100% of today's functionality.
 - **Client SDKs** (`tgram-analytics-js`, `tgram-analytics-py`,
