@@ -25,12 +25,44 @@ logger = logging.getLogger(__name__)
 _application: Application[Any, Any, Any, Any, Any, Any] | None = None
 
 
+def build_handler_filter(admin_chat_id: int) -> filters.BaseFilter:
+    """Compose the pre-dispatch filter applied to every message handler.
+
+    Two shapes, picked by whether a custom user resolver is registered:
+
+    * **Single-tenant (default)** — ``filters.Chat(admin_chat_id)``. The
+      operator's own chat is the only one that may drive the bot.
+    * **Multi-tenant** — a resolver registered via
+      :func:`app.extensions.register_user_resolver` becomes the
+      authorization gate (it decides which accounts exist, together with
+      ``@requires_user``). The single-chat pre-filter must step aside, or
+      every other account's updates are discarded by PTB *before* dispatch
+      — silently, since no handler ever runs and the caller gets no reply
+      at all. Still private-chats-only: handler output is one account's
+      analytics and must not fan out to a group's members.
+
+    Filters registered via :func:`app.extensions.register_bot_filter` are
+    AND-combined on top of whichever base applies, so they can only
+    narrow the audience.
+    """
+    from app.extensions import get_bot_filters, get_user_resolver
+
+    base: filters.BaseFilter = (
+        filters.ChatType.PRIVATE
+        if get_user_resolver() is not None
+        else filters.Chat(chat_id=admin_chat_id)
+    )
+    for extra in get_bot_filters():
+        base = base & extra
+    return base
+
+
 def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, Any, Any, Any, Any]:
     """Build an Application with all handlers registered.
 
     Uses ``updater=None`` so updates arrive via the webhook endpoint, not
-    Telegram's long-polling.  Handlers are restricted to messages/callbacks
-    from the configured admin chat ID only.
+    Telegram's long-polling.  Message handlers are gated by
+    :func:`build_handler_filter`.
     """
     from app.bot.handlers.alerts import alert_callback, alerts_command, handle_text_message
     from app.bot.handlers.digest import digest_command
@@ -49,17 +81,10 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
 
     # Defense-in-depth: every handler is also wrapped with ``@requires_user``
     # which resolves the current ``User`` and short-circuits unauthorised
-    # callers. The ``filters.Chat(...)`` gate below is a cheap pre-filter
-    # so PTB doesn't dispatch updates from non-admin chats. Deployments
-    # that register a custom user resolver and additional filters via
-    # :mod:`app.extensions` may want to widen the audience — see
-    # :func:`app.extensions.register_bot_filter` for the AND-composition
-    # contract.
-    from app.extensions import get_bot_filters
-
-    admin_filter: filters.BaseFilter = filters.Chat(chat_id=admin_chat_id)
-    for extra in get_bot_filters():
-        admin_filter = admin_filter & extra
+    # callers. The filter below is only a cheap pre-filter so PTB doesn't
+    # dispatch updates it would reject anyway — see
+    # :func:`build_handler_filter` for how it is composed.
+    handler_filter = build_handler_filter(admin_chat_id)
 
     # Defaults (5s read/write) are too tight for media uploads like
     # edit_message_media on busy/slow networks — bump them so chart photo
@@ -75,17 +100,17 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
         .build()
     )
 
-    app.add_handler(CommandHandler("start", start_command, filters=admin_filter))
-    app.add_handler(CommandHandler("help", help_command, filters=admin_filter))
-    app.add_handler(CommandHandler("cancel", cancel_command, filters=admin_filter))
-    app.add_handler(CommandHandler("add", add_command, filters=admin_filter))
-    app.add_handler(CommandHandler("projects", projects_command, filters=admin_filter))
-    app.add_handler(CommandHandler("digest", digest_command, filters=admin_filter))
-    app.add_handler(CommandHandler("overview", overview_command, filters=admin_filter))
-    app.add_handler(CommandHandler("alerts", alerts_command, filters=admin_filter))
-    app.add_handler(CommandHandler("doctor", doctor_command, filters=admin_filter))
-    app.add_handler(CommandHandler("mcp", mcp_command, filters=admin_filter))
-    app.add_handler(CommandHandler("mcp_token", mcp_token_command, filters=admin_filter))
+    app.add_handler(CommandHandler("start", start_command, filters=handler_filter))
+    app.add_handler(CommandHandler("help", help_command, filters=handler_filter))
+    app.add_handler(CommandHandler("cancel", cancel_command, filters=handler_filter))
+    app.add_handler(CommandHandler("add", add_command, filters=handler_filter))
+    app.add_handler(CommandHandler("projects", projects_command, filters=handler_filter))
+    app.add_handler(CommandHandler("digest", digest_command, filters=handler_filter))
+    app.add_handler(CommandHandler("overview", overview_command, filters=handler_filter))
+    app.add_handler(CommandHandler("alerts", alerts_command, filters=handler_filter))
+    app.add_handler(CommandHandler("doctor", doctor_command, filters=handler_filter))
+    app.add_handler(CommandHandler("mcp", mcp_command, filters=handler_filter))
+    app.add_handler(CommandHandler("mcp_token", mcp_token_command, filters=handler_filter))
 
     # Callback queries don't support CommandHandler filters directly — we
     # guard inside the handler using the same admin_chat_id check.
@@ -102,7 +127,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
 
     # Text messages for multi-step conversation flows (e.g., add-alert)
     app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND & admin_filter, handle_text_message)
+        MessageHandler(filters.TEXT & ~filters.COMMAND & handler_filter, handle_text_message)
     )
 
     return app

@@ -129,8 +129,11 @@ def register_project_pre_create(hook: ProjectPreCreate) -> None:
 def register_bot_filter(f: ptb_filters.BaseFilter) -> None:
     """Add a filter that gates every bot handler.
 
-    Filters are AND-combined with the default ``filters.Chat(admin_chat_id)``
-    in ``app.bot.setup.build_application``.
+    Filters are AND-combined by ``app.bot.setup.build_handler_filter`` on
+    top of the base gate, so they can only narrow the audience. The base
+    is ``filters.Chat(admin_chat_id)`` by default, or
+    ``filters.ChatType.PRIVATE`` once a custom user resolver is
+    registered — see :func:`register_user_resolver`.
     """
     _bot_filters.append(f)
 
