@@ -58,7 +58,9 @@ async def mcp_command(
             f"<code>{esc}</code>\n\n"
             "Your client opens a browser to sign in with Telegram the first "
             "time. Once connected, the agent can read your analytics across "
-            f"all {project_count} of your projects.\n\n"
+            f"all {project_count} of your projects. It can also ask to create "
+            "a project or rotate a project key — both need your approval "
+            "first.\n\n"
             'Then ask: <i>"list my tgram-analytics projects"</i>.'
         )
         return
@@ -66,9 +68,10 @@ async def mcp_command(
     # Default self-hosted install: static bearer token via /mcp_token.
     await update.message.reply_html(
         "🔌 <b>Connect an AI agent (MCP)</b>\n\n"
-        "Give Claude / Cursor / other MCP clients read access to your "
+        "Give Claude / Cursor / other MCP clients access to your "
         f"analytics — one connection covers all {project_count} of your "
-        "projects.\n\n"
+        "projects. Reading is unrestricted; creating a project or rotating a "
+        "project key needs your approval first.\n\n"
         "<b>1. Create an access token</b>\n"
         "<code>/mcp_token new my-laptop</code>  (shown once — copy it)\n\n"
         "<b>2. Add the server to your client</b>\n"
