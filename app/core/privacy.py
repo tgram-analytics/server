@@ -12,6 +12,7 @@ to one UTC day. It rotates automatically because the cache key is keyed by
 from __future__ import annotations
 
 import collections
+import contextlib
 import functools
 import hashlib
 import json
@@ -334,6 +335,8 @@ def scrub_properties(
 
 # ── Log redaction filter ──────────────────────────────────────────────────
 
+_redaction_installed = False
+
 _REDACT_PATTERNS: list[re.Pattern[str]] = [
     re.compile(p)
     for p in (
@@ -346,29 +349,77 @@ _REDACT_PATTERNS: list[re.Pattern[str]] = [
 ]
 
 
+def redact_text(text: str) -> str:
+    """Return *text* with every :data:`_REDACT_PATTERNS` match masked."""
+    for pat in _REDACT_PATTERNS:
+        text = pat.sub("[REDACTED]", text)
+    return text
+
+
+def _redact_record(record: logging.LogRecord) -> None:
+    """Scrub *record* in place: format it, mask it, clear ``args``.
+
+    Clearing ``args`` is essential: if any downstream handler / formatter
+    were to call ``getMessage()`` again, leaving the args in place would
+    trigger a second ``%``-interpolation against the already-substituted
+    message and either raise ``TypeError`` or silently double-format.
+    """
+    record.msg = redact_text(record.getMessage())
+    record.args = ()
+
+
 class RedactingFilter(logging.Filter):
     """Logging filter that scrubs sensitive tokens from formatted log records.
 
-    The filter calls ``record.getMessage()`` (which interpolates
-    ``record.msg % record.args``) to obtain the fully formatted message, runs
-    each regex in ``_REDACT_PATTERNS`` against it, then writes the redacted
-    string back to ``record.msg`` and clears ``record.args``. Clearing
-    ``args`` is essential: if any downstream handler / formatter were to call
-    ``getMessage()`` again, leaving the args in place would trigger a second
-    ``%``-interpolation against the already-substituted message and either
-    raise ``TypeError`` or silently double-format.
-
-    Installed on the root logger from ``create_app()`` so every logger in the
-    process inherits the redaction (uvicorn, sqlalchemy, third-party libs).
+    Kept as a filter for call sites that want redaction on one specific
+    logger or handler. Process-wide coverage comes from
+    :func:`install_log_redaction` instead — see the note there on why a
+    filter on the root logger cannot provide it.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.getMessage()
-        for pat in _REDACT_PATTERNS:
-            msg = pat.sub("[REDACTED]", msg)
-        record.msg = msg
-        record.args = ()
+        _redact_record(record)
         return True
+
+
+def install_log_redaction() -> None:
+    """Redact every log record created in this process. Idempotent.
+
+    Installed from ``create_app()``.
+
+    This wraps the *record factory* rather than adding a filter to the root
+    logger, because a logger's filters run only on records logged **through
+    that logger** — records propagated up from a child logger reach the root
+    logger's handlers without ever being offered to the root logger's
+    filters. Third-party libraries all log through their own loggers
+    (``httpx`` logs the outbound Telegram URL, bot token included), so a root
+    filter left exactly the records that matter unredacted. The factory runs
+    for every record in the process, whichever logger creates it, before any
+    handler can emit it.
+
+    A redaction failure must never take the process's logging with it, so a
+    broken pattern degrades to an unredacted record rather than an exception
+    inside ``Logger.makeRecord``.
+    """
+    global _redaction_installed
+    if _redaction_installed:
+        return
+
+    previous_factory = logging.getLogRecordFactory()
+
+    def factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
+        record = previous_factory(*args, **kwargs)
+        with contextlib.suppress(Exception):  # defensive: never break logging
+            _redact_record(record)
+        return record
+
+    logging.setLogRecordFactory(factory)
+    _redaction_installed = True
+
+
+def redaction_installed() -> bool:
+    """True once :func:`install_log_redaction` has run. Introspection for tests."""
+    return _redaction_installed
 
 
 def get_privacy_counters() -> dict[str, int]:

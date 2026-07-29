@@ -1,6 +1,5 @@
 """FastAPI application factory and lifespan handler."""
 
-import logging
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
 
@@ -14,7 +13,7 @@ from app.api.webhook import router as webhook_router
 from app.bot.setup import init_bot, shutdown_bot
 from app.core.config import get_settings
 from app.core.database import close_db, init_db
-from app.core.privacy import RedactingFilter
+from app.core.privacy import install_log_redaction
 from app.core.redis_client import close_redis, init_redis
 from app.core.sentry import init_sentry
 from app.extensions import get_registered_http_routers
@@ -95,13 +94,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
-    # Install the redacting filter on the root logger so every logger in the
-    # process (uvicorn, sqlalchemy, app.*) inherits it. ``create_app()`` runs
-    # at import time and only once; we still guard against duplicate
-    # installations in case it is reloaded by tests.
-    root_logger = logging.getLogger()
-    if not any(isinstance(f, RedactingFilter) for f in root_logger.filters):
-        root_logger.addFilter(RedactingFilter())
+    # Redact secrets from every log record created in this process — including
+    # the ones third-party loggers (uvicorn, sqlalchemy, httpx) propagate up to
+    # the root handlers, which a root-logger filter never sees. Idempotent, so
+    # a test-time reload is harmless.
+    install_log_redaction()
 
     # Initialise Sentry before FastAPI() so its ASGI/HTTPX/SQLAlchemy
     # auto-integrations attach to the app and outbound clients. No-op when
