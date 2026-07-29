@@ -149,10 +149,15 @@ def test_propagated_third_party_record_is_redacted() -> None:
     which carries the bot token, and propagates it to the root logger's
     handlers. A filter added to the *root logger* never runs on propagated
     records — only the originating logger's filters do — so redaction has to
-    happen where every record passes: at construction.
+    happen somewhere every record passes.
     """
     install_log_redaction()
-    token = "8637377571:AAEA-Ir6Gjn9rErCeSS25ne6leGm_O_6ln0"
+    # Synthetic, and it must stay that way: this repo is public and a real
+    # token pasted here is a published token. Shape only — enough digits, a
+    # colon, and 30+ body chars to match ``_REDACT_PATTERNS``. Six digits, not
+    # the eight-to-ten a real bot id carries, so the fixture cannot itself trip
+    # secret scanning.
+    token = "123456:FAKEfakeFAKEfakeFAKEfakeFAKEfake"
 
     out = _capture_root_output(
         lambda: logging.getLogger("httpx").info(
