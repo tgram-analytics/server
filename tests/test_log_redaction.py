@@ -1,21 +1,26 @@
 """Tests for the log-redaction filter (Phase 4.4).
 
-We do not rely on pytest's ``caplog`` for the redaction assertions: caplog
-attaches its own ``LogCaptureHandler`` and does NOT run filters added to the
-root logger (filters there only gate propagation through the standard
-handler chain). Instead we synthesise ``logging.LogRecord`` instances and
-invoke ``RedactingFilter.filter`` directly — this exercises the real code
-path (``getMessage()`` interpolation + ``record.args`` reset) without any
-fixture-ordering surprises.
+Two layers are covered here:
+
+* ``RedactingFilter`` — the pattern behaviour, exercised by synthesising
+  ``logging.LogRecord`` instances and calling ``filter`` directly. We do not
+  use pytest's ``caplog`` for these: it attaches its own ``LogCaptureHandler``
+  and would add fixture-ordering surprises to assertions that are really
+  about ``getMessage()`` interpolation and the ``record.args`` reset.
+* ``install_log_redaction`` — the process-wide install, exercised end to end
+  through a real root handler with a record from a *library* logger, which is
+  the shape that leaked a bot token in production.
 """
 
 from __future__ import annotations
 
+import io
 import logging
+from collections.abc import Callable
 
 import pytest
 
-from app.core.privacy import RedactingFilter
+from app.core.privacy import RedactingFilter, install_log_redaction
 
 
 def _make_record(msg: str, args: object = None) -> logging.LogRecord:
@@ -109,9 +114,64 @@ def test_redacts_mcp_bearer_token(redactor: RedactingFilter) -> None:
     assert "[REDACTED]" in out
 
 
-def test_filter_installed_on_root_logger() -> None:
-    """Importing ``app.main`` installs a ``RedactingFilter`` on the root logger."""
+def test_redaction_installed_by_app_import() -> None:
+    """Importing ``app.main`` installs process-wide redaction."""
     # Importing for side-effects: ``create_app()`` runs at import time.
     import app.main  # noqa: F401
+    from app.core.privacy import redaction_installed
 
-    assert any(type(f).__name__ == "RedactingFilter" for f in logging.getLogger().filters)
+    assert redaction_installed() is True
+
+
+# ── End-to-end: third-party loggers must be covered too ───────────────────────
+
+
+def _capture_root_output(log: Callable[[], None]) -> str:
+    """Run *log* with a capturing handler on the root logger, return its output."""
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    root = logging.getLogger()
+    saved_handlers, saved_level = root.handlers[:], root.level
+    root.handlers = [handler]
+    root.setLevel(logging.INFO)
+    try:
+        log()
+    finally:
+        root.handlers, root.level = saved_handlers, saved_level
+    return stream.getvalue()
+
+
+def test_propagated_third_party_record_is_redacted() -> None:
+    """A record from a library logger reaches the root handler redacted.
+
+    This is the production shape: ``httpx`` logs the outbound Telegram URL,
+    which carries the bot token, and propagates it to the root logger's
+    handlers. A filter added to the *root logger* never runs on propagated
+    records — only the originating logger's filters do — so redaction has to
+    happen where every record passes: at construction.
+    """
+    install_log_redaction()
+    token = "8637377571:AAEA-Ir6Gjn9rErCeSS25ne6leGm_O_6ln0"
+
+    out = _capture_root_output(
+        lambda: logging.getLogger("httpx").info(
+            'HTTP Request: POST https://api.telegram.org/bot%s/getMe "HTTP/1.1 200 OK"',
+            token,
+        )
+    )
+
+    assert token not in out
+    assert "[REDACTED]" in out
+
+
+def test_install_log_redaction_is_idempotent() -> None:
+    """Installing twice does not stack factories or double-redact."""
+    install_log_redaction()
+    first = logging.getLogRecordFactory()
+    install_log_redaction()
+
+    assert logging.getLogRecordFactory() is first
+
+    out = _capture_root_output(lambda: logging.getLogger("httpx").info("plain message"))
+    assert out.strip() == "plain message"
