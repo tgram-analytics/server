@@ -166,12 +166,44 @@ def test_propagated_third_party_record_is_redacted() -> None:
 
 
 def test_install_log_redaction_is_idempotent() -> None:
-    """Installing twice does not stack factories or double-redact."""
+    """Installing twice does not stack wrappers around ``Handler.format``."""
     install_log_redaction()
-    first = logging.getLogRecordFactory()
+    first = logging.Handler.format
     install_log_redaction()
 
-    assert logging.getLogRecordFactory() is first
+    assert logging.Handler.format is first
 
     out = _capture_root_output(lambda: logging.getLogger("httpx").info("plain message"))
     assert out.strip() == "plain message"
+
+
+def test_uvicorn_access_log_survives_redaction() -> None:
+    """Redaction must not consume ``record.args``.
+
+    ``uvicorn.logging.AccessFormatter.formatMessage`` unpacks five values out
+    of ``record.args``. Redacting by collapsing the record — formatting it and
+    clearing ``args`` — leaves that formatter with an empty tuple, so every
+    access log line raises ``ValueError: not enough values to unpack`` inside
+    ``Handler.emit`` and the line is lost. Redaction happens at format time
+    instead, leaving the record itself untouched.
+    """
+    from uvicorn.logging import AccessFormatter
+
+    install_log_redaction()
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(AccessFormatter(fmt="%(message)s", use_colors=False))
+    logger = logging.getLogger("uvicorn.access.test")
+    logger.handlers, logger.propagate, logger.level = [handler], False, logging.INFO
+
+    logger.info(
+        '%s - "%s %s HTTP/%s" %d',
+        "127.0.0.1:52012",
+        "GET",
+        "/health",
+        "1.1",
+        200,
+    )
+
+    out = stream.getvalue()
+    assert "GET" in out and "/health" in out

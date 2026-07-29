@@ -12,7 +12,6 @@ to one UTC day. It rotates automatically because the cache key is keyed by
 from __future__ import annotations
 
 import collections
-import contextlib
 import functools
 import hashlib
 import json
@@ -336,6 +335,7 @@ def scrub_properties(
 # ── Log redaction filter ──────────────────────────────────────────────────
 
 _redaction_installed = False
+_unpatched_handler_format: Any = None
 
 _REDACT_PATTERNS: list[re.Pattern[str]] = [
     re.compile(p)
@@ -356,64 +356,68 @@ def redact_text(text: str) -> str:
     return text
 
 
-def _redact_record(record: logging.LogRecord) -> None:
-    """Scrub *record* in place: format it, mask it, clear ``args``.
-
-    Clearing ``args`` is essential: if any downstream handler / formatter
-    were to call ``getMessage()`` again, leaving the args in place would
-    trigger a second ``%``-interpolation against the already-substituted
-    message and either raise ``TypeError`` or silently double-format.
-    """
-    record.msg = redact_text(record.getMessage())
-    record.args = ()
-
-
 class RedactingFilter(logging.Filter):
     """Logging filter that scrubs sensitive tokens from formatted log records.
 
-    Kept as a filter for call sites that want redaction on one specific
-    logger or handler. Process-wide coverage comes from
-    :func:`install_log_redaction` instead — see the note there on why a
-    filter on the root logger cannot provide it.
+    Collapses the record: interpolates ``msg % args``, masks the result, and
+    clears ``args`` so a downstream re-format cannot double-interpolate. That
+    collapse is destructive — a formatter that reads ``record.args``
+    structurally (``uvicorn.logging.AccessFormatter``) will not survive it —
+    so this is for attaching to one specific logger or handler whose
+    formatter you control.
+
+    Process-wide redaction goes through :func:`install_log_redaction`
+    instead, which leaves records intact.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        _redact_record(record)
+        record.msg = redact_text(record.getMessage())
+        record.args = ()
         return True
 
 
 def install_log_redaction() -> None:
-    """Redact every log record created in this process. Idempotent.
+    """Mask secrets in every line this process logs. Idempotent.
 
     Installed from ``create_app()``.
 
-    This wraps the *record factory* rather than adding a filter to the root
-    logger, because a logger's filters run only on records logged **through
-    that logger** — records propagated up from a child logger reach the root
-    logger's handlers without ever being offered to the root logger's
-    filters. Third-party libraries all log through their own loggers
-    (``httpx`` logs the outbound Telegram URL, bot token included), so a root
-    filter left exactly the records that matter unredacted. The factory runs
-    for every record in the process, whichever logger creates it, before any
-    handler can emit it.
+    Wraps ``logging.Handler.format`` so redaction runs on the **rendered
+    line**, at the last point before a handler writes it. Two constraints
+    force that placement, and between them they rule out the two obvious
+    alternatives:
 
-    A redaction failure must never take the process's logging with it, so a
-    broken pattern degrades to an unredacted record rather than an exception
-    inside ``Logger.makeRecord``.
+    * A filter on the root logger only sees records logged *through* the root
+      logger. Records propagated up from a child logger reach the root
+      logger's handlers without ever being offered to its filters, so every
+      third-party logger went unredacted — ``httpx`` logs the outbound
+      Telegram URL, bot token included.
+    * Redacting the record itself (via the record factory, or any filter)
+      means interpolating ``msg % args`` early and clearing ``args``. That
+      breaks formatters that read ``record.args`` structurally:
+      ``uvicorn.logging.AccessFormatter`` unpacks five values from it and
+      raises ``ValueError`` on every access log line.
+
+    Formatting the record is exactly the step that resolves ``msg % args``
+    into text, so redacting its output needs no assumptions about either.
+    It also catches secrets that straddle the boundary — ``"bot%s"`` plus a
+    token argument is one string by then.
+
+    Coverage note: a handler that overrides ``format`` itself, or renders
+    from record attributes without calling it (the Sentry integration builds
+    its event payload directly), is outside this. :class:`RedactingFilter`
+    remains available to attach to such a handler.
     """
-    global _redaction_installed
+    global _redaction_installed, _unpatched_handler_format
     if _redaction_installed:
         return
 
-    previous_factory = logging.getLogRecordFactory()
+    original_format = logging.Handler.format
 
-    def factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
-        record = previous_factory(*args, **kwargs)
-        with contextlib.suppress(Exception):  # defensive: never break logging
-            _redact_record(record)
-        return record
+    def format_redacted(self: logging.Handler, record: logging.LogRecord) -> str:
+        return redact_text(original_format(self, record))
 
-    logging.setLogRecordFactory(factory)
+    logging.Handler.format = format_redacted  # type: ignore[method-assign]
+    _unpatched_handler_format = original_format
     _redaction_installed = True
 
 
