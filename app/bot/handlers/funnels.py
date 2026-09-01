@@ -1,4 +1,4 @@
-"""Funnel handlers: create, view, and delete conversion funnels."""
+"""Funnel handlers: create, view, rename, and delete conversion funnels."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from app.bot.auth import requires_user
 from app.bot.constants import PERIOD_LABEL, PERIODS, TIME_WINDOW_LABEL, TIME_WINDOWS, escape_photo
 from app.bot.states import BotStateService
 from app.core.database import get_session_factory
+from app.models.bot_conversation_state import BotConversationState
 from app.models.user import User
 from app.services.analytics import list_event_names
 from app.services.charts import ChartGenerationError, generate_funnel_chart
@@ -30,8 +31,13 @@ from app.services.funnels import (
     delete_funnel,
     get_funnel,
     list_funnels,
+    rename_funnel,
 )
 from app.services.projects import get_project
+
+# Telegram inline-button labels get truncated well before this, and an
+# over-long name is exactly what made the funnel charts unreadable.
+MAX_FUNNEL_NAME_CHARS = 64
 
 # ── Keyboard helpers ─────────────────────────────────────────────────────────
 
@@ -49,7 +55,10 @@ def _funnel_view_keyboard(
     return InlineKeyboardMarkup(
         [
             period_row,
-            [InlineKeyboardButton("🗑 Delete funnel", callback_data=f"fnl_del:{funnel_id_str}")],
+            [
+                InlineKeyboardButton("✏️ Rename", callback_data=f"fnl_ren:{funnel_id_str}"),
+                InlineKeyboardButton("🗑 Delete", callback_data=f"fnl_del:{funnel_id_str}"),
+            ],
             [
                 InlineKeyboardButton(
                     "« Back to funnels",
@@ -127,6 +136,15 @@ async def funnel_callback(
         window_key = data[8:]
         await _pick_time_window(query, window_key, owner_user_id)
 
+    elif data == "fnl_skipname":
+        await _skip_funnel_name(query)
+
+    elif data.startswith("fnl_ren:"):
+        # The Rename button sits on the chart photo, which cannot be edited
+        # into text — swap it for a placeholder message first.
+        funnel_id_str = data[8:]
+        await _start_rename_funnel(await escape_photo(query), funnel_id_str, owner_user_id)
+
     elif data.startswith("fnl_view:"):
         # fnl_view:{funnel_id}:{period}
         parts = data[9:].rsplit(":", 1)
@@ -148,7 +166,7 @@ async def funnel_callback(
 async def _start_add_funnel(
     query: CallbackQuery, project_id_str: str, owner_user_id: uuid.UUID
 ) -> None:
-    """Step 1: show the event picker directly — no name input required."""
+    """Step 1: show the event picker. The name is asked for at the end."""
     assert isinstance(query.message, Message)
     chat_id = query.message.chat_id
 
@@ -314,7 +332,7 @@ async def _finalize_events(query: CallbackQuery) -> None:
 async def _pick_time_window(
     query: CallbackQuery, window_key: str, owner_user_id: uuid.UUID
 ) -> None:
-    """Time window selected — create the funnel and show first results."""
+    """Time window selected — ask for a name before creating the funnel."""
     assert isinstance(query.message, Message)
     chat_id = query.message.chat_id
 
@@ -350,20 +368,92 @@ async def _pick_time_window(
             await query.edit_message_text("❌ Project not found.")
             return
 
-        funnel_name = " → ".join(steps)
-        funnel = await create_funnel(
-            session,
-            project_id=pid,
-            name=funnel_name,
-            steps=steps,
-            time_window=window_seconds,
-        )
-        await svc.clear(chat_id)
+        payload["window"] = window_seconds
+        await svc.save(chat_id, flow="add_funnel", step="name", payload=payload)
         await session.commit()
 
     window_label = TIME_WINDOW_LABEL.get(window_key, window_key)
     steps_text = " → ".join(html.escape(s) for s in steps)
 
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("Skip — use a default name", callback_data="fnl_skipname")]]
+    )
+    await query.edit_message_text(
+        f"🔀 <b>New Funnel</b>\n\n"
+        f"Steps: {steps_text}\n"
+        f"Time window: {window_label}\n\n"
+        f"Now send a <b>short name</b> for this funnel — it becomes the chart title.\n"
+        f"<i>Example: Signup → paid</i>",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+
+
+async def _skip_funnel_name(query: CallbackQuery) -> None:
+    """Create the funnel with an auto-generated short name."""
+    assert isinstance(query.message, Message)
+    chat_id = query.message.chat_id
+
+    factory = get_session_factory()
+    async with factory() as session:
+        svc = BotStateService(session)
+        state = await svc.get(chat_id)
+
+        if state is None or state.flow != "add_funnel" or state.step != "name":
+            await query.edit_message_text("❌ Session expired.")
+            return
+
+        payload = state.payload or {}
+        steps: list[str] = payload.get("events", [])
+        result = await _create_from_payload(session, svc, chat_id, payload, _auto_name(steps))
+
+    if result is None:
+        await query.edit_message_text("❌ Invalid state. Please start again.")
+        return
+
+    text, keyboard = result
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
+
+
+async def _create_from_payload(
+    session: AsyncSession,
+    svc: BotStateService,
+    chat_id: int,
+    payload: dict[str, Any],
+    name: str,
+) -> tuple[str, InlineKeyboardMarkup] | None:
+    """Persist the funnel described by *payload*; return the confirmation text.
+
+    Returns ``None`` when the stored payload is unusable, in which case the
+    conversation state has already been cleared.
+    """
+    project_id_str = payload.get("project_id")
+    steps: list[str] = payload.get("events", [])
+    window_seconds = payload.get("window")
+
+    if not project_id_str or len(steps) < 2 or not isinstance(window_seconds, int):
+        await svc.clear(chat_id)
+        await session.commit()
+        return None
+
+    pid = uuid.UUID(project_id_str)
+    owner_raw = payload.get("owner_user_id")
+    if owner_raw and await get_project(session, pid, uuid.UUID(owner_raw)) is None:
+        await svc.clear(chat_id)
+        await session.commit()
+        return None
+
+    funnel = await create_funnel(
+        session,
+        project_id=pid,
+        name=name,
+        steps=steps,
+        time_window=window_seconds,
+    )
+    await svc.clear(chat_id)
+    await session.commit()
+
+    steps_text = " → ".join(html.escape(s) for s in steps)
     keyboard = InlineKeyboardMarkup(
         [
             [
@@ -380,15 +470,128 @@ async def _pick_time_window(
             ],
         ]
     )
+    text = (
+        f"✅ <b>Funnel created!</b>\n\n"
+        f"Name: <b>{html.escape(name)}</b>\n"
+        f"Steps: {steps_text}\n"
+        f"Time window: {_seconds_to_label(window_seconds)}"
+    )
+    return text, keyboard
+
+
+# ── Rename ───────────────────────────────────────────────────────────────────
+
+
+async def _start_rename_funnel(
+    query: CallbackQuery, funnel_id_str: str, owner_user_id: uuid.UUID
+) -> None:
+    """Ask for a new name for an existing funnel."""
+    assert isinstance(query.message, Message)
+    chat_id = query.message.chat_id
+
+    try:
+        fid = uuid.UUID(funnel_id_str)
+    except ValueError:
+        await query.edit_message_text("❌ Invalid funnel reference.")
+        return
+
+    factory = get_session_factory()
+    async with factory() as session:
+        funnel = await get_funnel(session, fid)
+        if funnel is None:
+            await query.edit_message_text("❌ Funnel not found.")
+            return
+        if await get_project(session, funnel.project_id, owner_user_id) is None:
+            await query.edit_message_text("❌ Project not found.")
+            return
+
+        svc = BotStateService(session)
+        await svc.save(
+            chat_id,
+            flow="rename_funnel",
+            step="name",
+            payload={
+                "funnel_id": funnel_id_str,
+                "project_id": str(funnel.project_id),
+                "owner_user_id": str(owner_user_id),
+            },
+        )
+        await session.commit()
+        current_name = funnel.name
 
     await query.edit_message_text(
-        f"✅ <b>Funnel created!</b>\n\n"
-        f"Name: <b>{html.escape(funnel_name)}</b>\n"
-        f"Steps: {steps_text}\n"
-        f"Time window: {window_label}",
+        f"✏️ <b>Rename funnel</b>\n\n"
+        f"Current name: <b>{html.escape(current_name)}</b>\n\n"
+        f"Send the new name — it becomes the chart title.",
         parse_mode="HTML",
-        reply_markup=keyboard,
     )
+
+
+# ── Text input ───────────────────────────────────────────────────────────────
+
+
+async def handle_funnel_name_text(
+    update: Update,
+    session: AsyncSession,
+    svc: BotStateService,
+    state: BotConversationState,
+) -> None:
+    """Process a funnel name typed by the user (create and rename flows)."""
+    assert update.effective_chat is not None
+    assert update.message is not None
+
+    chat_id = update.effective_chat.id
+    name = _clean_name(update.message.text or "")
+
+    if not name:
+        await update.message.reply_text(
+            "⚠️ The name cannot be empty. Send a short name for this funnel:"
+        )
+        return
+
+    payload = state.payload or {}
+
+    if state.flow == "rename_funnel":
+        try:
+            fid = uuid.UUID(payload.get("funnel_id", ""))
+        except ValueError:
+            await svc.clear(chat_id)
+            await session.commit()
+            await update.message.reply_text("❌ Invalid funnel reference. Please start again.")
+            return
+
+        funnel = await get_funnel(session, fid)
+        owner_raw = payload.get("owner_user_id")
+        if (
+            funnel is None
+            or not owner_raw
+            or await get_project(session, funnel.project_id, uuid.UUID(owner_raw)) is None
+        ):
+            await svc.clear(chat_id)
+            await session.commit()
+            await update.message.reply_text("❌ Funnel not found.")
+            return
+
+        await rename_funnel(session, fid, name)
+        await svc.clear(chat_id)
+        await session.commit()
+
+        await update.message.reply_text(
+            f"✅ Renamed to <b>{html.escape(name)}</b>.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("📊 View Results", callback_data=f"fnl_view:{fid}:30d")]]
+            ),
+        )
+        return
+
+    result = await _create_from_payload(session, svc, chat_id, payload, name)
+    if result is None:
+        await update.message.reply_text("❌ Invalid state. Please start again.")
+        return
+
+    text, keyboard = result
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 
 # ── View & delete ────────────────────────────────────────────────────────────
@@ -446,7 +649,8 @@ async def _view_funnel(
     try:
         png_bytes = await generate_funnel_chart(
             data,
-            title=f"{funnel.name} — {period_label} (window: {window_label})",
+            title=funnel.name,
+            subtitle=f"{period_label} · window {window_label}".upper(),
         )
     except ChartGenerationError:
         await query.edit_message_text(
@@ -525,6 +729,30 @@ async def _delete_funnel(
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def _clean_name(raw: str) -> str:
+    """Normalise a user-supplied funnel name to a single short line."""
+    name = " ".join(raw.split())
+    if len(name) > MAX_FUNNEL_NAME_CHARS:
+        name = name[: MAX_FUNNEL_NAME_CHARS - 1].rstrip() + "…"
+    return name
+
+
+def _auto_name(steps: list[str]) -> str:
+    """Fallback name: first and last step, never the whole chain.
+
+    The old behaviour joined every step with ``→``, which produced names so
+    long they overflowed the chart title and squeezed the plot off-canvas.
+    """
+    if not steps:
+        return "Funnel"
+    if len(steps) == 1:
+        return _clean_name(steps[0])
+    name = f"{steps[0]} → {steps[-1]}"
+    if len(steps) > 2:
+        name = f"{name} ({len(steps)} steps)"
+    return _clean_name(name)
 
 
 def _seconds_to_label(seconds: int) -> str:
