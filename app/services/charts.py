@@ -53,6 +53,22 @@ _PNG_SCALE = 2  # 2x density so charts stay crisp on retina Telegram clients
 _DEFAULT_WIDTH = 720
 _DEFAULT_HEIGHT = 720
 
+# Vega-Lite does not wrap titles: a long single-line title stretches the whole
+# canvas sideways and squeezes the plot into a corner.  We wrap by hand and
+# hard-cap the number of lines so the chart always stays the dominant element.
+_TITLE_LINE_CHARS = 34
+_TITLE_MAX_LINES = 2
+_SUBTITLE_LINE_CHARS = 58
+_SUBTITLE_MAX_LINES = 2
+
+# Funnel layout: horizontal rows so long event names stay readable and the
+# chart grows downwards (not sideways) as steps are added.
+_FUNNEL_WIDTH = 540
+_FUNNEL_ROW_HEIGHT = 46
+_FUNNEL_MIN_HEIGHT = 240
+_FUNNEL_LABEL_LIMIT = 210
+_FUNNEL_TRACK = "#EEF3F7"
+
 
 @alt.theme.register("telegram", enable=True)
 def _telegram_theme() -> alt.theme.ThemeConfig:
@@ -112,6 +128,47 @@ def _fmt_date(dt: datetime) -> str:
     return dt.strftime("%-d %b")
 
 
+def _wrap(text: str, width: int, max_lines: int) -> list[str]:
+    """Greedy word-wrap *text* into at most *max_lines* lines of *width* chars.
+
+    Overflow is ellipsised.  Vega-Lite accepts a list of strings as a title or
+    subtitle and renders one line per entry.
+    """
+    words = str(text).split()
+    if not words:
+        return [""]
+
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if current and len(candidate) > width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    lines.append(current)
+
+    truncated = len(lines) > max_lines
+    lines = lines[:max_lines]
+    # A single token longer than *width* (no spaces to break on) still has to
+    # be cut, otherwise it widens the canvas exactly like the unwrapped title.
+    lines = [ln if len(ln) <= width else ln[: width - 1].rstrip() + "…" for ln in lines]
+    if truncated and not lines[-1].endswith("…"):
+        lines[-1] = lines[-1][: width - 1].rstrip() + "…"
+    return lines
+
+
+def _title_params(title: str, subtitle: str | None = None) -> alt.TitleParams:
+    """Wrapped title/subtitle so a long label never inflates the canvas."""
+    if subtitle:
+        return alt.TitleParams(
+            text=_wrap(title, _TITLE_LINE_CHARS, _TITLE_MAX_LINES),
+            subtitle=_wrap(subtitle, _SUBTITLE_LINE_CHARS, _SUBTITLE_MAX_LINES),
+        )
+    return alt.TitleParams(text=_wrap(title, _TITLE_LINE_CHARS, _TITLE_MAX_LINES))
+
+
 async def _render(chart: alt.Chart) -> bytes:
     """Render a chart to PNG bytes via vl-convert, off the event loop."""
     spec = chart.to_dict()
@@ -132,7 +189,7 @@ def _empty_data_message(title: str, period_label: str | None = None) -> alt.Char
         .properties(
             width=_DEFAULT_WIDTH,
             height=_DEFAULT_HEIGHT,
-            title=alt.TitleParams(text=title, subtitle=subtitle),
+            title=_title_params(title, subtitle),
         )
     )
     return chart  # type: ignore[no-any-return]
@@ -186,7 +243,7 @@ async def generate_line_chart(
     chart = (area + points + peak_text).properties(
         width=_DEFAULT_WIDTH,
         height=_DEFAULT_HEIGHT,
-        title=alt.TitleParams(text=title, subtitle=period_label.upper()),
+        title=_title_params(title, period_label.upper()),
     )
     return await _render(chart)
 
@@ -270,7 +327,7 @@ async def generate_multi_line_chart(
         .properties(
             width=_DEFAULT_WIDTH,
             height=_DEFAULT_HEIGHT,
-            title=alt.TitleParams(text=title, subtitle=period_label.upper()),
+            title=_title_params(title, period_label.upper()),
         )
     )
     return await _render(chart)
@@ -333,7 +390,7 @@ async def generate_bar_chart(
     chart = (bars + labels).properties(
         width=_DEFAULT_WIDTH,
         height=_DEFAULT_HEIGHT,
-        title=alt.TitleParams(text=title),
+        title=_title_params(title),
     )
     return await _render(chart)
 
@@ -394,7 +451,7 @@ async def generate_pie_chart(
     chart = (arcs + pct_labels).properties(
         width=_DEFAULT_WIDTH,
         height=_DEFAULT_HEIGHT,
-        title=alt.TitleParams(text=title),
+        title=_title_params(title),
     )
     return await _render(chart)
 
@@ -404,48 +461,92 @@ async def generate_funnel_chart(
     data: list[dict[str, Any]],
     *,
     title: str,
+    subtitle: str | None = None,
 ) -> bytes:
-    """Vertical funnel bars in the Telegram-blue ramp."""
+    """Horizontal funnel rows in the Telegram-blue ramp.
+
+    Rows run horizontally (not as vertical columns) so long event names read
+    straight across instead of colliding on a cramped x-axis, and so the chart
+    grows *downwards* as steps are added rather than sideways.
+    """
     if not data:
-        return await _render(_empty_data_message(title))
+        return await _render(_empty_data_message(title, subtitle))
 
     base_count = data[0]["count"] or 1
+    max_count = max(r["count"] for r in data) or 1
+    last = max(len(data) - 1, 1)
+
     rows = []
     for i, r in enumerate(data):
         pct = round(r["count"] / base_count * 100)
+        # Spread the blue ramp evenly over however many steps there are, so the
+        # shading always reads deep → pale from the first step to the last.
+        shade = _TG_FUNNEL_STOPS[round(i / last * (len(_TG_FUNNEL_STOPS) - 1))]
         rows.append(
             {
-                "step": r["step"],
+                "step": str(r["step"]),
                 "count": r["count"],
-                "label": f"{r['count']:,}",
-                "pct": f"{pct}%",
-                "shade": _TG_FUNNEL_STOPS[i % len(_TG_FUNNEL_STOPS)],
+                "label": f"{r['count']:,}  ·  {pct}%",
+                "shade": shade,
+                "track": max_count,
                 "order": i,
             }
         )
 
+    source = alt.InlineData(values=rows)
+    step_axis = alt.Y(
+        "step:N",
+        sort=alt.SortField("order"),
+        axis=alt.Axis(
+            title=None,
+            labelLimit=_FUNNEL_LABEL_LIMIT,
+            labelFontSize=14,
+            labelFontWeight=600,
+            labelColor=_INK,
+            grid=False,
+        ),
+    )
+    # Headroom on the right so the value label never spills off the canvas.
+    count_scale = alt.Scale(domain=[0, max_count * 1.24], nice=False)
+    bar_height = alt.RelativeBandSize(0.62)
+
+    # A pale full-width track behind every row keeps near-zero steps visible
+    # instead of collapsing them into an invisible sliver.
+    track = (
+        alt.Chart(source)
+        .mark_bar(cornerRadiusEnd=6, height=bar_height, color=_FUNNEL_TRACK)
+        .encode(y=step_axis, x=alt.X("track:Q", scale=count_scale, axis=None))
+    )
     bars = (
-        alt.Chart(alt.InlineData(values=rows))
-        .mark_bar(cornerRadiusTopLeft=8, cornerRadiusTopRight=8, size=120)
+        alt.Chart(source)
+        .mark_bar(cornerRadiusEnd=6, height=bar_height)
         .encode(
-            x=alt.X("step:N", sort=alt.SortField("order"), axis=alt.Axis(title=None, labelAngle=0)),
-            y=alt.Y("count:Q", axis=alt.Axis(title=None)),
+            y=step_axis,
+            x=alt.X("count:Q", scale=count_scale, axis=None),
             color=alt.Color("shade:N", scale=None, legend=None),
         )
     )
-    text_count = (
-        alt.Chart(alt.InlineData(values=rows))
-        .mark_text(dy=-30, font=_FONT, fontSize=15, fontWeight=700, color=_INK)
-        .encode(x=alt.X("step:N", sort=alt.SortField("order")), y="count:Q", text="label:N")
+    labels = (
+        alt.Chart(source)
+        .mark_text(
+            align="left",
+            baseline="middle",
+            dx=10,
+            font=_FONT,
+            fontSize=14,
+            fontWeight=700,
+            color=_INK,
+        )
+        .encode(
+            y=step_axis,
+            x=alt.X("count:Q", scale=count_scale, axis=None),
+            text="label:N",
+        )
     )
-    text_pct = (
-        alt.Chart(alt.InlineData(values=rows))
-        .mark_text(dy=-12, font=_FONT, fontSize=12, fontWeight=600, color=_MUTED)
-        .encode(x=alt.X("step:N", sort=alt.SortField("order")), y="count:Q", text="pct:N")
-    )
-    chart = (bars + text_count + text_pct).properties(
-        width=_DEFAULT_WIDTH,
-        height=_DEFAULT_HEIGHT,
-        title=alt.TitleParams(text=title),
+
+    chart = (track + bars + labels).properties(
+        width=_FUNNEL_WIDTH,
+        height=max(_FUNNEL_MIN_HEIGHT, _FUNNEL_ROW_HEIGHT * len(rows)),
+        title=_title_params(title, subtitle),
     )
     return await _render(chart)

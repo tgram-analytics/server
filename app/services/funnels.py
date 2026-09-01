@@ -49,6 +49,16 @@ async def get_funnel(session: AsyncSession, funnel_id: uuid.UUID) -> Funnel | No
     return result.scalar_one_or_none()
 
 
+async def rename_funnel(session: AsyncSession, funnel_id: uuid.UUID, name: str) -> Funnel | None:
+    """Give an existing funnel a new display name. Returns the updated row."""
+    funnel = await get_funnel(session, funnel_id)
+    if funnel is None:
+        return None
+    funnel.name = name
+    await session.flush()
+    return funnel
+
+
 async def delete_funnel(session: AsyncSession, funnel_id: uuid.UUID) -> None:
     await session.execute(delete(Funnel).where(Funnel.id == funnel_id))
 

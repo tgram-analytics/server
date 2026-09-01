@@ -5,6 +5,7 @@ HTTP service).  Tests assert that the renderer returns valid PNG bytes
 and that Vega-Lite specs include the expected titles/series.
 """
 
+import struct
 from datetime import UTC, datetime
 from unittest.mock import patch
 
@@ -147,6 +148,97 @@ async def test_generate_funnel_chart_returns_valid_png():
     ]
     result = await generate_funnel_chart(data, title="Funnel")
     assert result[:8] == _PNG_MAGIC
+
+
+# ── funnel readability regressions ────────────────────────────────────────
+
+_LONG_FUNNEL = [
+    {"step": "signup", "count": 202},
+    {"step": "onboarding_completed", "count": 131},
+    {"step": "app_opened", "count": 6},
+    {"step": "app_upload_started", "count": 5},
+    {"step": "app_mode_chosen", "count": 1},
+    {"step": "app_model_chosen", "count": 1},
+    {"step": "paywall_shown", "count": 1},
+    {"step": "checkout_redirected", "count": 0},
+    {"step": "app_generate_clicked", "count": 0},
+    {"step": "app_job_done", "count": 0},
+]
+
+
+def _png_size(png: bytes) -> tuple[int, int]:
+    """Width/height in pixels, read from the PNG IHDR chunk."""
+    return struct.unpack(">II", png[16:24])
+
+
+async def test_funnel_chart_canvas_is_not_inflated_by_a_long_title():
+    """A long title must wrap, not stretch the canvas sideways.
+
+    Regression: titles were passed to Vega-Lite as one unbroken line, so a
+    funnel named after all ten of its steps blew the canvas out to 5024px
+    while the plot stayed 720px — the chart became an unreadable sliver in
+    the corner.
+    """
+    from app.services.charts import generate_funnel_chart
+
+    long_title = " → ".join(r["step"] for r in _LONG_FUNNEL) + " — last 30 days (window: 1 hour)"
+
+    wide = await generate_funnel_chart(_LONG_FUNNEL, title=long_title)
+    short = await generate_funnel_chart(_LONG_FUNNEL, title="Signup → paid")
+
+    wide_w, wide_h = _png_size(wide)
+    short_w, _ = _png_size(short)
+
+    # The long title costs at most a few title lines, never extra width.
+    assert wide_w == short_w
+    # And the image stays portrait-ish, so the chart dominates the frame.
+    assert wide_w < 2 * wide_h
+
+
+async def test_funnel_chart_title_is_wrapped_and_capped():
+    from app.services import charts as charts_mod
+
+    captured = {}
+
+    def _capture(spec, scale):  # noqa: ANN001
+        captured["spec"] = spec
+        return _PNG_MAGIC + b"\x00" * 32
+
+    long_title = " → ".join(r["step"] for r in _LONG_FUNNEL)
+    with patch.object(charts_mod.vlc, "vegalite_to_png", side_effect=_capture):
+        await charts_mod.generate_funnel_chart(
+            _LONG_FUNNEL, title=long_title, subtitle="LAST 30 DAYS · WINDOW 1 HOUR"
+        )
+
+    title = captured["spec"]["title"]
+    assert isinstance(title["text"], list)
+    assert len(title["text"]) <= charts_mod._TITLE_MAX_LINES
+    assert all(len(line) <= charts_mod._TITLE_LINE_CHARS for line in title["text"])
+    assert title["subtitle"] == ["LAST 30 DAYS · WINDOW 1 HOUR"]
+
+
+async def test_funnel_chart_height_grows_with_step_count():
+    """Rows stack downwards, so more steps means a taller — not wider — image."""
+    from app.services.charts import generate_funnel_chart
+
+    three = await generate_funnel_chart(_LONG_FUNNEL[:3], title="Short")
+    ten = await generate_funnel_chart(_LONG_FUNNEL, title="Short")
+
+    three_w, three_h = _png_size(three)
+    ten_w, ten_h = _png_size(ten)
+
+    assert ten_w == three_w
+    assert ten_h > three_h
+
+
+def test_wrap_cuts_a_single_oversized_token():
+    """A word longer than the line budget is truncated, not left to overflow."""
+    from app.services.charts import _wrap
+
+    lines = _wrap("a" * 200, 34, 2)
+    assert len(lines) == 1
+    assert len(lines[0]) <= 34
+    assert lines[0].endswith("…")
 
 
 async def test_generate_multi_line_chart_returns_valid_png():
