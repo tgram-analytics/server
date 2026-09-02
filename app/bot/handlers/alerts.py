@@ -33,9 +33,39 @@ from app.services.alerts import (
     mute_alert,
     toggle_alert,
 )
-from app.services.analytics import events_over_time, list_property_keys, top_properties
+from app.services.analytics import (
+    events_over_time,
+    list_event_names,
+    list_property_keys,
+    top_properties,
+)
 from app.services.charts import ChartGenerationError, generate_line_chart, generate_pie_chart
 from app.services.projects import get_project
+
+
+def condition_keyboard() -> InlineKeyboardMarkup:
+    """Every / Every N / Threshold buttons for the add-alert flow (``alert_cond:*``)."""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Every", callback_data="alert_cond:every"),
+                InlineKeyboardButton("Every N", callback_data="alert_cond:every_n"),
+                InlineKeyboardButton("Threshold", callback_data="alert_cond:threshold"),
+            ]
+        ]
+    )
+
+
+def condition_prompt(event_name: str) -> str:
+    """HTML text asking which condition to use for *event_name* (Add Alert header + bullet legend)."""
+    return (
+        f"📝 <b>Add Alert</b>\n\n"
+        f"Event: <b>{html.escape(event_name)}</b>\n\n"
+        f"Choose when to notify:\n"
+        f"• <b>Every</b> — on every occurrence\n"
+        f"• <b>Every N</b> — every Nth occurrence\n"
+        f"• <b>Threshold</b> — when count exceeds N per day"
+    )
 
 
 def _format_alert_label(alert: Alert) -> str:
@@ -198,11 +228,20 @@ async def alert_callback(
             query, alert_id_str, owner_user_id, keys_token=keys_token
         )
 
+    elif data.startswith("alert_ev:"):
+        event_name = data[9:]
+        await _pick_event_for_alert(query, event_name, owner_user_id)
+
     elif data == "alert_noop":
         pass
 
     elif data.startswith("back:alerts:"):
         project_id_str = data[12:]
+        assert isinstance(query.message, Message)
+        factory = get_session_factory()
+        async with factory() as session:
+            await BotStateService(session).clear(query.message.chat_id)
+            await session.commit()
         await show_alerts_menu(query, project_id_str, owner_user_id)
 
 
@@ -231,6 +270,8 @@ async def _start_add_alert(
             await query.edit_message_text("❌ Project not found.")
             return
 
+        events = await list_event_names(session, project_id=pid)
+
         svc = BotStateService(session)
         await svc.save(
             chat_id,
@@ -240,11 +281,71 @@ async def _start_add_alert(
         )
         await session.commit()
 
+    rows: list[list[InlineKeyboardButton]] = []
+    for evt in events:
+        event_name = evt["event_name"]
+        cb = f"alert_ev:{event_name}"
+        if len(cb.encode()) > 64:
+            continue
+        label = f"{event_name}  ({evt['count']:,})"
+        rows.append([InlineKeyboardButton(label, callback_data=cb)])
+
+    rows.append([InlineKeyboardButton("« Back", callback_data=f"back:alerts:{project_id_str}")])
+
+    if rows[:-1]:
+        text = "📝 <b>Add Alert</b>\n\nTap the event to monitor, or type a custom event name:"
+    else:
+        text = (
+            "📝 <b>Add Alert</b>\n\n"
+            "No events received yet — type the event name you want to monitor:\n\n"
+            "<i>Example: signup, purchase, pageview</i>"
+        )
+
     await query.edit_message_text(
-        "📝 <b>Add Alert</b>\n\n"
-        "Type the event name you want to monitor:\n\n"
-        "<i>Example: signup, purchase, pageview</i>",
+        text,
         parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+
+
+async def _pick_event_for_alert(
+    query: CallbackQuery, event_name: str, owner_user_id: uuid.UUID
+) -> None:
+    """Handle tapping an event button during the add-alert event-picker step."""
+    assert isinstance(query.message, Message)
+    chat_id = query.message.chat_id
+
+    factory = get_session_factory()
+    async with factory() as session:
+        svc = BotStateService(session)
+        state = await svc.get(chat_id)
+
+        if state is None or state.flow != "add_alert" or state.step != "event_name":
+            await query.edit_message_text("❌ No active alert creation. Use the Alerts menu.")
+            return
+
+        payload = state.payload or {}
+        project_id_str = payload.get("project_id")
+
+        if not project_id_str or (
+            await get_project(session, uuid.UUID(project_id_str), owner_user_id) is None
+        ):
+            await svc.clear(chat_id)
+            await session.commit()
+            await query.edit_message_text("❌ Project not found.")
+            return
+
+        payload["event_name"] = event_name
+        await svc.save(
+            chat_id,
+            flow="add_alert",
+            step="condition",
+            payload=payload,
+        )
+        await session.commit()
+
+    await query.edit_message_text(
+        condition_prompt(event_name), parse_mode="HTML", reply_markup=condition_keyboard()
     )
 
 
@@ -435,24 +536,10 @@ async def handle_text_message(
             payload=payload,
         )
 
-        keyboard = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("Every", callback_data="alert_cond:every"),
-                    InlineKeyboardButton("Every N", callback_data="alert_cond:every_n"),
-                    InlineKeyboardButton("Threshold", callback_data="alert_cond:threshold"),
-                ]
-            ]
-        )
         await update.message.reply_text(
-            f"📝 <b>Add Alert</b>\n\n"
-            f"Event: <b>{html.escape(event_name)}</b>\n\n"
-            f"Choose when to notify:\n"
-            f"• <b>Every</b> — on every occurrence\n"
-            f"• <b>Every N</b> — every Nth occurrence\n"
-            f"• <b>Threshold</b> — when count exceeds N per day",
+            condition_prompt(event_name),
             parse_mode="HTML",
-            reply_markup=keyboard,
+            reply_markup=condition_keyboard(),
         )
 
     elif state.step == "threshold_n":

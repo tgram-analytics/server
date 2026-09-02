@@ -584,6 +584,235 @@ async def test_non_admin_alert_callback_ignored(singleton_user):
     update.callback_query.edit_message_text.assert_not_called()
 
 
+async def test_add_alert_lists_project_events_as_buttons(session_factory, singleton_user):
+    from app.bot.handlers.alerts import alert_callback
+    from app.bot.states import BotStateService
+    from app.services.events import insert_event
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="event-picker.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        await session.commit()
+        pid = str(project.id)
+
+        for i in range(2):
+            await insert_event(
+                session,
+                project_id=project.id,
+                event_name="signup",
+                session_id=f"s-signup-{i}",
+                properties={},
+            )
+        await insert_event(
+            session,
+            project_id=project.id,
+            event_name="purchase",
+            session_id="s-purchase",
+            properties={},
+        )
+        await session.commit()
+
+    update, ctx = _make_callback(chat_id=ADMIN_ID, data=f"alert_add:{pid}")
+    await alert_callback(update, ctx)
+
+    update.callback_query.edit_message_text.assert_called_once()
+    text = update.callback_query.edit_message_text.call_args[0][0]
+    assert "Tap the event" in text
+    assert "type a custom event name" in text
+
+    keyboard = update.callback_query.edit_message_text.call_args[1].get("reply_markup")
+    assert keyboard is not None
+    rows = keyboard.inline_keyboard
+    buttons = [(btn.text, btn.callback_data) for row in rows for btn in row]
+    assert ("signup  (2)", "alert_ev:signup") in buttons
+    assert ("purchase  (1)", "alert_ev:purchase") in buttons
+    assert buttons.index(("signup  (2)", "alert_ev:signup")) < buttons.index(
+        ("purchase  (1)", "alert_ev:purchase")
+    )
+    assert len(rows[-1]) == 1
+    assert rows[-1][0].text == "« Back"
+    assert rows[-1][0].callback_data == f"back:alerts:{pid}"
+
+    async with session_factory() as session:
+        state = await BotStateService(session).get(ADMIN_ID)
+        assert state is not None
+        assert state.flow == "add_alert"
+        assert state.step == "event_name"
+
+
+async def test_add_alert_without_events_asks_to_type(session_factory, singleton_user):
+    from app.bot.handlers.alerts import alert_callback
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="no-events.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        await session.commit()
+        pid = str(project.id)
+
+    update, ctx = _make_callback(chat_id=ADMIN_ID, data=f"alert_add:{pid}")
+    await alert_callback(update, ctx)
+
+    update.callback_query.edit_message_text.assert_called_once()
+    text = update.callback_query.edit_message_text.call_args[0][0]
+    assert "type the event name" in text
+
+    keyboard = update.callback_query.edit_message_text.call_args[1].get("reply_markup")
+    assert keyboard is not None
+    rows = keyboard.inline_keyboard
+    assert len(rows) == 1
+    assert rows[0][0].text == "« Back"
+    assert rows[0][0].callback_data == f"back:alerts:{pid}"
+
+
+async def test_add_alert_skips_event_names_too_long_for_callback_data(
+    session_factory, singleton_user
+):
+    from app.bot.handlers.alerts import alert_callback
+    from app.services.events import insert_event
+    from app.services.projects import create_project
+
+    long_name = "x" * 70
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="long-event.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        await session.commit()
+        pid = str(project.id)
+
+        await insert_event(
+            session,
+            project_id=project.id,
+            event_name=long_name,
+            session_id="s-long",
+            properties={},
+        )
+        await insert_event(
+            session,
+            project_id=project.id,
+            event_name="normal",
+            session_id="s-normal",
+            properties={},
+        )
+        await session.commit()
+
+    update, ctx = _make_callback(chat_id=ADMIN_ID, data=f"alert_add:{pid}")
+    await alert_callback(update, ctx)
+
+    keyboard = update.callback_query.edit_message_text.call_args[1].get("reply_markup")
+    assert keyboard is not None
+    buttons = [(btn.text, btn.callback_data) for row in keyboard.inline_keyboard for btn in row]
+    assert not any(long_name in text for text, _ in buttons)
+    assert any(cb == "alert_ev:normal" for _, cb in buttons)
+
+
+async def test_tapping_event_button_moves_to_condition_step(session_factory, singleton_user):
+    from app.bot.handlers.alerts import alert_callback
+    from app.bot.states import BotStateService
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="tap-event.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        await session.commit()
+        pid = str(project.id)
+
+        svc = BotStateService(session)
+        await svc.save(
+            ADMIN_ID,
+            flow="add_alert",
+            step="event_name",
+            payload={"project_id": pid, "owner_user_id": str(singleton_user.id)},
+        )
+        await session.commit()
+
+    update, ctx = _make_callback(chat_id=ADMIN_ID, data="alert_ev:signup")
+    await alert_callback(update, ctx)
+
+    update.callback_query.edit_message_text.assert_called_once()
+    text = update.callback_query.edit_message_text.call_args[0][0]
+    assert "signup" in text
+
+    keyboard = update.callback_query.edit_message_text.call_args[1].get("reply_markup")
+    assert keyboard is not None
+    buttons = [(btn.text, btn.callback_data) for row in keyboard.inline_keyboard for btn in row]
+    assert ("Every", "alert_cond:every") in buttons
+    assert ("Every N", "alert_cond:every_n") in buttons
+    assert ("Threshold", "alert_cond:threshold") in buttons
+
+    async with session_factory() as session:
+        state = await BotStateService(session).get(ADMIN_ID)
+        assert state is not None
+        assert state.step == "condition"
+        assert state.payload["event_name"] == "signup"
+        assert state.payload["project_id"] == pid
+
+
+async def test_tapping_event_button_without_state_shows_error(singleton_user):
+    from app.bot.handlers.alerts import alert_callback
+
+    fresh_chat_id = 444_555
+    update, ctx = _make_callback(chat_id=fresh_chat_id, data="alert_ev:signup")
+    await alert_callback(update, ctx)
+
+    update.callback_query.edit_message_text.assert_called_once()
+    text = update.callback_query.edit_message_text.call_args[0][0]
+    assert "No active alert creation" in text
+
+
+async def test_back_from_add_alert_clears_state(session_factory, singleton_user):
+    from app.bot.handlers.alerts import alert_callback
+    from app.bot.states import BotStateService
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="back-clear.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        await session.commit()
+        pid = str(project.id)
+
+        svc = BotStateService(session)
+        await svc.save(
+            ADMIN_ID,
+            flow="add_alert",
+            step="event_name",
+            payload={"project_id": pid, "owner_user_id": str(singleton_user.id)},
+        )
+        await session.commit()
+
+    update, ctx = _make_callback(chat_id=ADMIN_ID, data=f"back:alerts:{pid}")
+    await alert_callback(update, ctx)
+
+    update.callback_query.edit_message_text.assert_called_once()
+    text = update.callback_query.edit_message_text.call_args[0][0]
+    assert "Alerts" in text
+
+    async with session_factory() as session:
+        state = await BotStateService(session).get(ADMIN_ID)
+        assert state is None
+
+
 # ── Text message handler (conversation flow) ───────────────────────────────────
 
 
