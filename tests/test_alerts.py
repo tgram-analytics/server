@@ -988,6 +988,43 @@ async def test_edit_condition_every_updates_immediately(session_factory, singlet
         assert state is None
 
 
+async def test_edit_condition_callback_without_condition_is_rejected(
+    session_factory, singleton_user
+):
+    from app.bot.handlers.alerts import alert_callback
+    from app.services.alerts import create_alert, get_alert
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="edit-no-condition.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        alert = await create_alert(
+            session,
+            project_id=project.id,
+            event_name="click",
+            condition=AlertCondition.every_n,
+            threshold_n=5,
+        )
+        await session.commit()
+        pid = str(project.id)
+        aid = str(alert.id)
+
+    update, ctx = _make_callback(chat_id=ADMIN_ID, data=f"alert_ec:{aid}")
+    await alert_callback(update, ctx)
+
+    text = update.callback_query.edit_message_text.call_args[0][0]
+    assert "Invalid condition" in text
+
+    async with session_factory() as session:
+        reread = await get_alert(session, uuid.UUID(aid), uuid.UUID(pid))
+        assert reread.condition == AlertCondition.every_n
+        assert reread.threshold_n == 5
+
+
 async def test_edit_condition_every_n_prompts_for_number(session_factory, singleton_user):
     from app.bot.handlers.alerts import alert_callback
     from app.bot.states import BotStateService
