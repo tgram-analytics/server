@@ -20,6 +20,7 @@ from telegram.ext import ContextTypes
 
 from app.bot.auth import requires_user
 from app.bot.constants import escape_photo
+from app.bot.handlers.alerts import condition_keyboard, condition_prompt
 from app.bot.states import BotStateService
 from app.core.database import get_session_factory
 from app.models.user import User
@@ -455,24 +456,10 @@ async def _start_alert_for_event(query: CallbackQuery, owner_user_id: uuid.UUID)
         )
         await session.commit()
 
-    keyboard = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("Every", callback_data="alert_cond:every"),
-                InlineKeyboardButton("Every N", callback_data="alert_cond:every_n"),
-                InlineKeyboardButton("Threshold", callback_data="alert_cond:threshold"),
-            ]
-        ]
-    )
     await query.edit_message_text(
-        f"📝 <b>Add Alert</b>\n\n"
-        f"Event: <b>{html.escape(event_name)}</b>\n\n"
-        f"Choose when to notify:\n"
-        f"• <b>Every</b> — on every occurrence\n"
-        f"• <b>Every N</b> — every Nth occurrence\n"
-        f"• <b>Threshold</b> — when count exceeds N per day",
+        condition_prompt(event_name),
         parse_mode="HTML",
-        reply_markup=keyboard,
+        reply_markup=condition_keyboard(),
     )
 
 
