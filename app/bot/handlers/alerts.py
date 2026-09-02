@@ -266,8 +266,11 @@ async def alert_callback(
 
     elif data.startswith("alert_ec:"):
         rest = data[9:]  # "{alert_id}:{condition}"
-        alert_id_str, condition = rest.split(":", 1)
-        await _handle_edit_condition_choice(query, alert_id_str, condition, owner_user_id)
+        if ":" in rest:
+            alert_id_str, condition = rest.split(":", 1)
+            await _handle_edit_condition_choice(query, alert_id_str, condition, owner_user_id)
+        else:
+            await query.edit_message_text("❌ Invalid condition.")
 
     elif data == "alert_noop":
         pass
