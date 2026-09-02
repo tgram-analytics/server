@@ -765,8 +765,9 @@ async def test_tapping_event_button_moves_to_condition_step(session_factory, sin
         assert state.payload["project_id"] == pid
 
 
-async def test_tapping_event_button_without_state_shows_error(singleton_user):
+async def test_tapping_event_button_without_state_shows_error(session_factory, singleton_user):
     from app.bot.handlers.alerts import alert_callback
+    from app.bot.states import BotStateService
 
     fresh_chat_id = 444_555
     update, ctx = _make_callback(chat_id=fresh_chat_id, data="alert_ev:signup")
@@ -775,6 +776,48 @@ async def test_tapping_event_button_without_state_shows_error(singleton_user):
     update.callback_query.edit_message_text.assert_called_once()
     text = update.callback_query.edit_message_text.call_args[0][0]
     assert "No active alert creation" in text
+
+    async with session_factory() as session:
+        state = await BotStateService(session).get(fresh_chat_id)
+        assert state is None
+
+
+async def test_tapping_event_button_with_blank_name_is_rejected(session_factory, singleton_user):
+    from app.bot.handlers.alerts import alert_callback
+    from app.bot.states import BotStateService
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="tap-event-blank.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        await session.commit()
+        pid = str(project.id)
+
+        svc = BotStateService(session)
+        await svc.save(
+            ADMIN_ID,
+            flow="add_alert",
+            step="event_name",
+            payload={"project_id": pid, "owner_user_id": str(singleton_user.id)},
+        )
+        await session.commit()
+
+    update, ctx = _make_callback(chat_id=ADMIN_ID, data="alert_ev:   ")
+    await alert_callback(update, ctx)
+
+    update.callback_query.edit_message_text.assert_called_once()
+    text = update.callback_query.edit_message_text.call_args[0][0]
+    assert "Invalid event name" in text
+
+    async with session_factory() as session:
+        state = await BotStateService(session).get(ADMIN_ID)
+        assert state is not None
+        assert state.step == "event_name"
+        assert "event_name" not in (state.payload or {})
 
 
 async def test_back_from_add_alert_clears_state(session_factory, singleton_user):
@@ -923,25 +966,27 @@ async def test_edit_alert_rejects_foreign_alert(session_factory, singleton_user)
     # would make the "no state saved" assertion below meaningless.
     foreign_chat_id = 333
 
-    update, ctx = _make_callback(chat_id=foreign_chat_id, data=f"alert_edit:{aid}")
-    await alert_callback(update, ctx)
+    try:
+        update, ctx = _make_callback(chat_id=foreign_chat_id, data=f"alert_edit:{aid}")
+        await alert_callback(update, ctx)
 
-    text = update.callback_query.edit_message_text.call_args[0][0]
-    assert "not found" in text.lower()
+        text = update.callback_query.edit_message_text.call_args[0][0]
+        assert "not found" in text.lower()
 
-    async with session_factory() as session:
-        state = await BotStateService(session).get(foreign_chat_id)
-        assert state is None
-        reread = await get_alert(session, uuid.UUID(aid))
-        assert reread is not None
-        assert reread.condition == AlertCondition.every
-
-        await session.execute(sqltext("DELETE FROM alerts WHERE id = :i"), {"i": aid})
-        await session.execute(
-            sqltext("DELETE FROM projects WHERE owner_user_id = :o"), {"o": str(victim_id)}
-        )
-        await session.execute(sqltext("DELETE FROM users WHERE id = :i"), {"i": str(victim_id)})
-        await session.commit()
+        async with session_factory() as session:
+            state = await BotStateService(session).get(foreign_chat_id)
+            assert state is None
+            reread = await get_alert(session, uuid.UUID(aid))
+            assert reread is not None
+            assert reread.condition == AlertCondition.every
+    finally:
+        async with session_factory() as session:
+            await session.execute(sqltext("DELETE FROM alerts WHERE id = :i"), {"i": aid})
+            await session.execute(
+                sqltext("DELETE FROM projects WHERE owner_user_id = :o"), {"o": str(victim_id)}
+            )
+            await session.execute(sqltext("DELETE FROM users WHERE id = :i"), {"i": str(victim_id)})
+            await session.commit()
 
 
 async def test_edit_condition_every_updates_immediately(session_factory, singleton_user):
@@ -1200,24 +1245,26 @@ async def test_edit_threshold_text_rejects_foreign_alert(session_factory, single
         )
         await session.commit()
 
-    update, ctx = _make_update(chat_id=ADMIN_ID, text="25")
-    await handle_text_message(update, ctx)
+    try:
+        update, ctx = _make_update(chat_id=ADMIN_ID, text="25")
+        await handle_text_message(update, ctx)
 
-    text = update.message.reply_text.call_args[0][0]
-    assert "not found" in text.lower()
+        text = update.message.reply_text.call_args[0][0]
+        assert "not found" in text.lower()
 
-    async with session_factory() as session:
-        reread = await get_alert(session, uuid.UUID(aid), uuid.UUID(pid))
-        assert reread.condition == AlertCondition.every
-        state = await BotStateService(session).get(ADMIN_ID)
-        assert state is None
-
-        await session.execute(sqltext("DELETE FROM alerts WHERE id = :i"), {"i": aid})
-        await session.execute(
-            sqltext("DELETE FROM projects WHERE owner_user_id = :o"), {"o": str(victim_id)}
-        )
-        await session.execute(sqltext("DELETE FROM users WHERE id = :i"), {"i": str(victim_id)})
-        await session.commit()
+        async with session_factory() as session:
+            reread = await get_alert(session, uuid.UUID(aid), uuid.UUID(pid))
+            assert reread.condition == AlertCondition.every
+            state = await BotStateService(session).get(ADMIN_ID)
+            assert state is None
+    finally:
+        async with session_factory() as session:
+            await session.execute(sqltext("DELETE FROM alerts WHERE id = :i"), {"i": aid})
+            await session.execute(
+                sqltext("DELETE FROM projects WHERE owner_user_id = :o"), {"o": str(victim_id)}
+            )
+            await session.execute(sqltext("DELETE FROM users WHERE id = :i"), {"i": str(victim_id)})
+            await session.commit()
 
 
 # ── Text message handler (conversation flow) ───────────────────────────────────

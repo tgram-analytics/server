@@ -74,9 +74,9 @@ def condition_description(condition: AlertCondition, threshold_n: int | None) ->
     if condition == AlertCondition.every:
         return "notify on <b>every</b> occurrence"
     elif condition == AlertCondition.every_n:
-        return f"notify every <b>{threshold_n}</b> occurrences"
+        return f"notify every <b>{threshold_n or '?'}</b> occurrences"
     else:
-        return f"notify when exceeds <b>{threshold_n}</b>/day"
+        return f"notify when exceeds <b>{threshold_n or '?'}</b>/day"
 
 
 def _edit_condition_keyboard(alert_id: str, project_id: str) -> InlineKeyboardMarkup:
@@ -321,18 +321,19 @@ async def _start_add_alert(
         )
         await session.commit()
 
-    rows: list[list[InlineKeyboardButton]] = []
+    event_rows: list[list[InlineKeyboardButton]] = []
     for evt in events:
         event_name = evt["event_name"]
         cb = f"alert_ev:{event_name}"
         if len(cb.encode()) > 64:
             continue
         label = f"{event_name}  ({evt['count']:,})"
-        rows.append([InlineKeyboardButton(label, callback_data=cb)])
+        event_rows.append([InlineKeyboardButton(label, callback_data=cb)])
 
-    rows.append([InlineKeyboardButton("« Back", callback_data=f"back:alerts:{project_id_str}")])
+    back_row = [InlineKeyboardButton("« Back", callback_data=f"back:alerts:{project_id_str}")]
+    rows = event_rows + [back_row]
 
-    if rows[:-1]:
+    if event_rows:
         text = "📝 <b>Add Alert</b>\n\nTap the event to monitor, or type a custom event name:"
     else:
         text = (
@@ -362,6 +363,11 @@ async def _pick_event_for_alert(
 
         if state is None or state.flow != "add_alert" or state.step != "event_name":
             await query.edit_message_text("❌ No active alert creation. Use the Alerts menu.")
+            return
+
+        event_name = event_name.strip()
+        if not event_name:
+            await query.edit_message_text("❌ Invalid event name.")
             return
 
         payload = state.payload or {}
