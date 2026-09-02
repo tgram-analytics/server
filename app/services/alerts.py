@@ -94,6 +94,41 @@ async def toggle_alert(
     return alert
 
 
+async def update_alert(
+    session: AsyncSession,
+    alert_id: uuid.UUID,
+    project_id: uuid.UUID,
+    *,
+    condition: AlertCondition,
+    threshold_n: int | None = None,
+) -> Alert | None:
+    """Change an alert's condition and threshold.
+
+    ``threshold_n`` is required (>= 1) for ``every_n`` and ``threshold`` and
+    is forced to ``None`` for ``every``. The running ``counter`` is reset to 0
+    so an ``every_n`` alert starts counting from the new N and a ``threshold``
+    alert may fire again today under its new limit.
+    Returns ``None`` if the alert does not exist in *project_id*.
+    Raises ``ValueError`` when ``threshold_n`` is missing or < 1 for a
+    condition that needs it.
+    """
+    alert = await get_alert(session, alert_id, project_id)
+    if alert is None:
+        return None
+
+    if condition == AlertCondition.every:
+        threshold_n = None
+    elif threshold_n is None or threshold_n < 1:
+        raise ValueError(f"threshold_n must be >= 1 for condition '{condition.value}'")
+
+    alert.condition = condition
+    alert.threshold_n = threshold_n
+    alert.counter = 0
+    await session.flush()
+    await session.refresh(alert)
+    return alert
+
+
 async def disable_alert(
     session: AsyncSession,
     alert_id: uuid.UUID,
