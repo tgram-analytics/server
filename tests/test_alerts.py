@@ -813,6 +813,376 @@ async def test_back_from_add_alert_clears_state(session_factory, singleton_user)
         assert state is None
 
 
+# ── Edit alert flow ─────────────────────────────────────────────────────────────
+
+
+async def test_alerts_menu_labels_open_the_editor(session_factory, singleton_user):
+    from app.bot.handlers.alerts import show_alerts_menu
+    from app.services.alerts import create_alert
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="edit-menu.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        alert = await create_alert(
+            session, project_id=project.id, event_name="signup", condition=AlertCondition.every
+        )
+        await session.commit()
+        pid = str(project.id)
+        aid = str(alert.id)
+
+    query = MagicMock()
+    query.edit_message_text = AsyncMock()
+
+    await show_alerts_menu(query, pid, singleton_user.id)
+
+    text = query.edit_message_text.call_args[0][0]
+    assert "Tap an alert to edit" in text
+    keyboard = query.edit_message_text.call_args[1].get("reply_markup")
+    buttons = [(btn.text, btn.callback_data) for row in keyboard.inline_keyboard for btn in row]
+    label_btn = next(cb for text, cb in buttons if "signup" in text)
+    assert label_btn == f"alert_edit:{aid}"
+
+
+async def test_edit_alert_shows_current_condition_and_choices(session_factory, singleton_user):
+    from app.bot.handlers.alerts import alert_callback
+    from app.bot.states import BotStateService
+    from app.services.alerts import create_alert
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="edit-show.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        alert = await create_alert(
+            session,
+            project_id=project.id,
+            event_name="purchase",
+            condition=AlertCondition.every_n,
+            threshold_n=5,
+        )
+        await session.commit()
+        pid = str(project.id)
+        aid = str(alert.id)
+
+    update, ctx = _make_callback(chat_id=ADMIN_ID, data=f"alert_edit:{aid}")
+    await alert_callback(update, ctx)
+
+    update.callback_query.edit_message_text.assert_called_once()
+    text = update.callback_query.edit_message_text.call_args[0][0]
+    assert "purchase" in text
+    assert "every <b>5</b>" in text
+
+    keyboard = update.callback_query.edit_message_text.call_args[1].get("reply_markup")
+    buttons = [(btn.text, btn.callback_data) for row in keyboard.inline_keyboard for btn in row]
+    assert ("Every", f"alert_ec:{aid}:every") in buttons
+    assert ("Every N", f"alert_ec:{aid}:every_n") in buttons
+    assert ("Threshold", f"alert_ec:{aid}:threshold") in buttons
+    assert ("« Back", f"back:alerts:{pid}") in buttons
+
+    async with session_factory() as session:
+        state = await BotStateService(session).get(ADMIN_ID)
+        assert state is not None
+        assert state.flow == "edit_alert"
+        assert state.step == "condition"
+        assert state.payload["alert_id"] == aid
+
+
+async def test_edit_alert_rejects_foreign_alert(session_factory, singleton_user):
+    from sqlalchemy import text as sqltext
+
+    from app.bot.handlers.alerts import alert_callback
+    from app.bot.states import BotStateService
+    from app.models.user import User
+    from app.services.alerts import create_alert, get_alert
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        victim = User(telegram_user_id=999_555)
+        session.add(victim)
+        await session.flush()
+        project, _ = await create_project(
+            session, name="victim-edit.com", admin_chat_id=999_555, owner_user_id=victim.id
+        )
+        alert = await create_alert(
+            session, project_id=project.id, event_name="signup", condition=AlertCondition.every
+        )
+        await session.commit()
+        aid = str(alert.id)
+        victim_id = victim.id
+
+    # Use a chat id no other test touches — ADMIN_ID=111 is polluted by other
+    # tests in this file that seed edit-alert state and never clear it, which
+    # would make the "no state saved" assertion below meaningless.
+    foreign_chat_id = 333
+
+    update, ctx = _make_callback(chat_id=foreign_chat_id, data=f"alert_edit:{aid}")
+    await alert_callback(update, ctx)
+
+    text = update.callback_query.edit_message_text.call_args[0][0]
+    assert "not found" in text.lower()
+
+    async with session_factory() as session:
+        state = await BotStateService(session).get(foreign_chat_id)
+        assert state is None
+        reread = await get_alert(session, uuid.UUID(aid))
+        assert reread is not None
+        assert reread.condition == AlertCondition.every
+
+        await session.execute(sqltext("DELETE FROM alerts WHERE id = :i"), {"i": aid})
+        await session.execute(
+            sqltext("DELETE FROM projects WHERE owner_user_id = :o"), {"o": str(victim_id)}
+        )
+        await session.execute(sqltext("DELETE FROM users WHERE id = :i"), {"i": str(victim_id)})
+        await session.commit()
+
+
+async def test_edit_condition_every_updates_immediately(session_factory, singleton_user):
+    from app.bot.handlers.alerts import alert_callback
+    from app.bot.states import BotStateService
+    from app.services.alerts import create_alert, get_alert
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="edit-to-every.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        alert = await create_alert(
+            session,
+            project_id=project.id,
+            event_name="click",
+            condition=AlertCondition.every_n,
+            threshold_n=5,
+        )
+        alert.counter = 2
+        await session.flush()
+        await session.commit()
+        pid = str(project.id)
+        aid = str(alert.id)
+
+    update, ctx = _make_callback(chat_id=ADMIN_ID, data=f"alert_ec:{aid}:every")
+    await alert_callback(update, ctx)
+
+    text = update.callback_query.edit_message_text.call_args[0][0]
+    assert "Alert updated" in text
+    keyboard = update.callback_query.edit_message_text.call_args[1].get("reply_markup")
+    buttons = [(btn.text, btn.callback_data) for row in keyboard.inline_keyboard for btn in row]
+    assert ("« Back to alerts", f"back:alerts:{pid}") in buttons
+
+    async with session_factory() as session:
+        reread = await get_alert(session, uuid.UUID(aid), uuid.UUID(pid))
+        assert reread.condition == AlertCondition.every
+        assert reread.threshold_n is None
+        assert reread.counter == 0
+        state = await BotStateService(session).get(ADMIN_ID)
+        assert state is None
+
+
+async def test_edit_condition_every_n_prompts_for_number(session_factory, singleton_user):
+    from app.bot.handlers.alerts import alert_callback
+    from app.bot.states import BotStateService
+    from app.services.alerts import create_alert, get_alert
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="edit-to-every-n.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        alert = await create_alert(
+            session, project_id=project.id, event_name="signup", condition=AlertCondition.every
+        )
+        await session.commit()
+        pid = str(project.id)
+        aid = str(alert.id)
+
+    update, ctx = _make_callback(chat_id=ADMIN_ID, data=f"alert_ec:{aid}:every_n")
+    await alert_callback(update, ctx)
+
+    text = update.callback_query.edit_message_text.call_args[0][0]
+    assert "number N" in text
+
+    async with session_factory() as session:
+        state = await BotStateService(session).get(ADMIN_ID)
+        assert state is not None
+        assert state.flow == "edit_alert"
+        assert state.step == "threshold_n"
+        assert state.payload["condition"] == "every_n"
+        assert state.payload["alert_id"] == aid
+
+        reread = await get_alert(session, uuid.UUID(aid), uuid.UUID(pid))
+        assert reread.condition == AlertCondition.every
+
+
+async def test_edit_threshold_text_updates_alert(session_factory, singleton_user):
+    from app.bot.handlers.alerts import handle_text_message
+    from app.bot.states import BotStateService
+    from app.services.alerts import create_alert, get_alert
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="edit-text.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        alert = await create_alert(
+            session, project_id=project.id, event_name="purchase", condition=AlertCondition.every
+        )
+        await session.commit()
+        pid = str(project.id)
+        aid = str(alert.id)
+
+        svc = BotStateService(session)
+        await svc.save(
+            ADMIN_ID,
+            flow="edit_alert",
+            step="threshold_n",
+            payload={
+                "alert_id": aid,
+                "project_id": pid,
+                "owner_user_id": str(singleton_user.id),
+                "condition": "threshold",
+            },
+        )
+        await session.commit()
+
+    update, ctx = _make_update(chat_id=ADMIN_ID, text="25")
+    await handle_text_message(update, ctx)
+
+    update.message.reply_text.assert_called_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "Alert updated" in text
+    assert "25" in text
+
+    async with session_factory() as session:
+        reread = await get_alert(session, uuid.UUID(aid), uuid.UUID(pid))
+        assert reread.condition == AlertCondition.threshold
+        assert reread.threshold_n == 25
+        assert reread.counter == 0
+        state = await BotStateService(session).get(ADMIN_ID)
+        assert state is None
+
+
+async def test_edit_threshold_text_rejects_invalid_number(session_factory, singleton_user):
+    from app.bot.handlers.alerts import handle_text_message
+    from app.bot.states import BotStateService
+    from app.services.alerts import create_alert, get_alert
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="edit-text-invalid.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        alert = await create_alert(
+            session, project_id=project.id, event_name="purchase", condition=AlertCondition.every
+        )
+        await session.commit()
+        pid = str(project.id)
+        aid = str(alert.id)
+
+        svc = BotStateService(session)
+        await svc.save(
+            ADMIN_ID,
+            flow="edit_alert",
+            step="threshold_n",
+            payload={
+                "alert_id": aid,
+                "project_id": pid,
+                "owner_user_id": str(singleton_user.id),
+                "condition": "threshold",
+            },
+        )
+        await session.commit()
+
+    update, ctx = _make_update(chat_id=ADMIN_ID, text="abc")
+    await handle_text_message(update, ctx)
+
+    text = update.message.reply_text.call_args[0][0]
+    assert "positive integer" in text.lower()
+
+    async with session_factory() as session:
+        reread = await get_alert(session, uuid.UUID(aid), uuid.UUID(pid))
+        assert reread.condition == AlertCondition.every
+        state = await BotStateService(session).get(ADMIN_ID)
+        assert state is not None
+        assert state.step == "threshold_n"
+
+
+async def test_edit_threshold_text_rejects_foreign_alert(session_factory, singleton_user):
+    from sqlalchemy import text as sqltext
+
+    from app.bot.handlers.alerts import handle_text_message
+    from app.bot.states import BotStateService
+    from app.models.user import User
+    from app.services.alerts import create_alert, get_alert
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        victim = User(telegram_user_id=999_666)
+        session.add(victim)
+        await session.flush()
+        project, _ = await create_project(
+            session, name="victim-edit-text.com", admin_chat_id=999_666, owner_user_id=victim.id
+        )
+        alert = await create_alert(
+            session, project_id=project.id, event_name="signup", condition=AlertCondition.every
+        )
+        await session.commit()
+        pid = str(project.id)
+        aid = str(alert.id)
+        victim_id = victim.id
+
+        svc = BotStateService(session)
+        await svc.save(
+            ADMIN_ID,
+            flow="edit_alert",
+            step="threshold_n",
+            payload={
+                "alert_id": aid,
+                "project_id": pid,
+                "owner_user_id": str(singleton_user.id),
+                "condition": "threshold",
+            },
+        )
+        await session.commit()
+
+    update, ctx = _make_update(chat_id=ADMIN_ID, text="25")
+    await handle_text_message(update, ctx)
+
+    text = update.message.reply_text.call_args[0][0]
+    assert "not found" in text.lower()
+
+    async with session_factory() as session:
+        reread = await get_alert(session, uuid.UUID(aid), uuid.UUID(pid))
+        assert reread.condition == AlertCondition.every
+        state = await BotStateService(session).get(ADMIN_ID)
+        assert state is None
+
+        await session.execute(sqltext("DELETE FROM alerts WHERE id = :i"), {"i": aid})
+        await session.execute(
+            sqltext("DELETE FROM projects WHERE owner_user_id = :o"), {"o": str(victim_id)}
+        )
+        await session.execute(sqltext("DELETE FROM users WHERE id = :i"), {"i": str(victim_id)})
+        await session.commit()
+
+
 # ── Text message handler (conversation flow) ───────────────────────────────────
 
 

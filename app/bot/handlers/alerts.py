@@ -32,6 +32,7 @@ from app.services.alerts import (
     list_alerts,
     mute_alert,
     toggle_alert,
+    update_alert,
 )
 from app.services.analytics import (
     events_over_time,
@@ -68,6 +69,30 @@ def condition_prompt(event_name: str) -> str:
     )
 
 
+def condition_description(condition: AlertCondition, threshold_n: int | None) -> str:
+    """Human description used in confirmations, e.g. 'notify on <b>every</b> occurrence'."""
+    if condition == AlertCondition.every:
+        return "notify on <b>every</b> occurrence"
+    elif condition == AlertCondition.every_n:
+        return f"notify every <b>{threshold_n}</b> occurrences"
+    else:
+        return f"notify when exceeds <b>{threshold_n}</b>/day"
+
+
+def _edit_condition_keyboard(alert_id: str, project_id: str) -> InlineKeyboardMarkup:
+    """Every / Every N / Threshold buttons for editing an existing alert (``alert_ec:*``)."""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("Every", callback_data=f"alert_ec:{alert_id}:every"),
+                InlineKeyboardButton("Every N", callback_data=f"alert_ec:{alert_id}:every_n"),
+                InlineKeyboardButton("Threshold", callback_data=f"alert_ec:{alert_id}:threshold"),
+            ],
+            [InlineKeyboardButton("« Back", callback_data=f"back:alerts:{project_id}")],
+        ]
+    )
+
+
 def _format_alert_label(alert: Alert) -> str:
     """Format an alert for display in the list."""
     status = "✅" if alert.is_active else "⏸️"
@@ -100,7 +125,7 @@ async def show_alerts_menu(
         aid = str(alert.id)
         rows.append(
             [
-                InlineKeyboardButton(label, callback_data="alert_noop"),
+                InlineKeyboardButton(label, callback_data=f"alert_edit:{aid}"),
             ]
         )
         rows.append(
@@ -114,8 +139,11 @@ async def show_alerts_menu(
     rows.append([InlineKeyboardButton("« Back", callback_data=f"proj:{project_id_str}")])
 
     keyboard = InlineKeyboardMarkup(rows)
+    header = f"🔔 <b>Alerts for {html.escape(project.name)}</b>\n─────────────────"
+    if alerts:
+        header += "\nTap an alert to edit it."
     await query.edit_message_text(
-        f"🔔 <b>Alerts for {html.escape(project.name)}</b>\n─────────────────",
+        header,
         parse_mode="HTML",
         reply_markup=keyboard,
     )
@@ -231,6 +259,15 @@ async def alert_callback(
     elif data.startswith("alert_ev:"):
         event_name = data[9:]
         await _pick_event_for_alert(query, event_name, owner_user_id)
+
+    elif data.startswith("alert_edit:"):
+        alert_id_str = data[11:]
+        await _show_edit_alert(query, alert_id_str, owner_user_id)
+
+    elif data.startswith("alert_ec:"):
+        rest = data[9:]  # "{alert_id}:{condition}"
+        alert_id_str, condition = rest.split(":", 1)
+        await _handle_edit_condition_choice(query, alert_id_str, condition, owner_user_id)
 
     elif data == "alert_noop":
         pass
@@ -433,6 +470,138 @@ async def _handle_condition_choice(
             )
 
 
+async def _show_edit_alert(
+    query: CallbackQuery, alert_id_str: str, owner_user_id: uuid.UUID
+) -> None:
+    """Show the edit screen for an existing alert (condition choices)."""
+    try:
+        aid = uuid.UUID(alert_id_str)
+    except ValueError:
+        await query.edit_message_text("❌ Alert not found.")
+        return
+
+    assert isinstance(query.message, Message)
+    chat_id = query.message.chat_id
+
+    factory = get_session_factory()
+    async with factory() as session:
+        alert = await get_alert(session, aid)
+        if alert is None:
+            await query.edit_message_text("❌ Alert not found.")
+            return
+
+        project = await get_project(session, alert.project_id, owner_user_id)
+        if project is None:
+            await query.edit_message_text("❌ Alert not found.")
+            return
+
+        pid = str(alert.project_id)
+        event_name = alert.event_name
+        current_desc = condition_description(alert.condition, alert.threshold_n)
+
+        svc = BotStateService(session)
+        await svc.save(
+            chat_id,
+            flow="edit_alert",
+            step="condition",
+            payload={
+                "alert_id": alert_id_str,
+                "project_id": pid,
+                "owner_user_id": str(owner_user_id),
+            },
+        )
+        await session.commit()
+
+    text = (
+        f"✏️ <b>Edit Alert</b>\n\n"
+        f"Event: <b>{html.escape(event_name)}</b>\n"
+        f"Current: {current_desc}\n\n"
+        f"Choose the new condition:\n"
+        f"• <b>Every</b> — on every occurrence\n"
+        f"• <b>Every N</b> — every Nth occurrence\n"
+        f"• <b>Threshold</b> — when count exceeds N per day"
+    )
+    await query.edit_message_text(
+        text, parse_mode="HTML", reply_markup=_edit_condition_keyboard(alert_id_str, pid)
+    )
+
+
+async def _handle_edit_condition_choice(
+    query: CallbackQuery, alert_id_str: str, condition: str, owner_user_id: uuid.UUID
+) -> None:
+    """Handle a condition button click on the edit-alert screen."""
+    if condition not in ("every", "every_n", "threshold"):
+        await query.edit_message_text("❌ Invalid condition.")
+        return
+
+    try:
+        aid = uuid.UUID(alert_id_str)
+    except ValueError:
+        await query.edit_message_text("❌ Alert not found.")
+        return
+
+    assert isinstance(query.message, Message)
+    chat_id = query.message.chat_id
+
+    factory = get_session_factory()
+    async with factory() as session:
+        alert = await get_alert(session, aid)
+        if alert is None:
+            await query.edit_message_text("❌ Alert not found.")
+            return
+
+        project = await get_project(session, alert.project_id, owner_user_id)
+        if project is None:
+            await query.edit_message_text("❌ Alert not found.")
+            return
+
+        pid = str(alert.project_id)
+        event_name = alert.event_name
+        svc = BotStateService(session)
+
+        if condition == "every":
+            await update_alert(session, alert.id, alert.project_id, condition=AlertCondition.every)
+            await svc.clear(chat_id)
+            await session.commit()
+
+            keyboard = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("« Back to alerts", callback_data=f"back:alerts:{pid}")]]
+            )
+            await query.edit_message_text(
+                f"✅ Alert updated!\n\n"
+                f"Event: <b>{html.escape(event_name)}</b>\n"
+                f"Condition: {condition_description(AlertCondition.every, None)}",
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
+            return
+
+        current_threshold_n = alert.threshold_n
+        await svc.save(
+            chat_id,
+            flow="edit_alert",
+            step="threshold_n",
+            payload={
+                "alert_id": alert_id_str,
+                "project_id": pid,
+                "owner_user_id": str(owner_user_id),
+                "condition": condition,
+            },
+        )
+        await session.commit()
+
+        if condition == "every_n":
+            prompt = "Enter the number N (notify every Nth event):"
+        else:
+            prompt = "Enter the threshold (notify when exceeded per day):"
+
+        text = f"✏️ <b>Edit Alert</b>\n\nEvent: <b>{html.escape(event_name)}</b>\n\n{prompt}"
+        if current_threshold_n is not None:
+            text += f"\n<i>Current: {current_threshold_n}</i>"
+
+    await query.edit_message_text(text, parse_mode="HTML")
+
+
 async def _delete_alert(query: CallbackQuery, alert_id_str: str, owner_user_id: uuid.UUID) -> None:
     """Delete an alert and refresh the list."""
     factory = get_session_factory()
@@ -515,6 +684,77 @@ async def handle_text_message(
         from app.bot.handlers.funnels import handle_funnel_name_text
 
         await handle_funnel_name_text(update, session, svc, state)
+        return
+
+    if state.flow == "edit_alert":
+        if state.step != "threshold_n":
+            return
+
+        payload = state.payload or {}
+
+        try:
+            threshold_n = int(text.strip())
+            if threshold_n < 1:
+                raise ValueError()
+        except ValueError:
+            await update.message.reply_text("❌ Please enter a positive integer:")
+            return
+
+        alert_id_str = payload.get("alert_id")
+        project_id_str = payload.get("project_id")
+        edit_condition_str = payload.get("condition")
+
+        if (
+            not alert_id_str
+            or not project_id_str
+            or edit_condition_str not in ("every_n", "threshold")
+        ):
+            await svc.clear(chat_id)
+            await update.message.reply_text(
+                "❌ Invalid state. Please start again from the Alerts menu."
+            )
+            return
+
+        edit_alert = await get_alert(session, uuid.UUID(alert_id_str), uuid.UUID(project_id_str))
+        if (
+            edit_alert is None
+            or await get_project(session, uuid.UUID(project_id_str), user.id) is None
+        ):
+            await svc.clear(chat_id)
+            await update.message.reply_text(
+                "❌ Alert not found. Please start again from the Alerts menu."
+            )
+            return
+
+        edit_condition = (
+            AlertCondition.every_n if edit_condition_str == "every_n" else AlertCondition.threshold
+        )
+
+        await update_alert(
+            session,
+            edit_alert.id,
+            uuid.UUID(project_id_str),
+            condition=edit_condition,
+            threshold_n=threshold_n,
+        )
+        await svc.clear(chat_id)
+
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "« Back to alerts", callback_data=f"back:alerts:{project_id_str}"
+                    )
+                ]
+            ]
+        )
+        await update.message.reply_text(
+            f"✅ Alert updated!\n\n"
+            f"Event: <b>{html.escape(edit_alert.event_name)}</b>\n"
+            f"Condition: {condition_description(edit_condition, threshold_n)}",
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
         return
 
     if state.flow != "add_alert":
