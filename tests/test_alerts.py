@@ -7,6 +7,7 @@ CallbackQuery objects with MagicMock/AsyncMock, handlers called directly.
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from telegram import Message
 
 from app.models.alert import AlertCondition
@@ -225,6 +226,177 @@ async def test_toggle_alert(db_session, session_factory, singleton_user):
         toggled_back = await toggle_alert(session, alert.id, project.id)
         await session.commit()
         assert toggled_back.is_active is True
+
+
+async def test_update_alert_every_to_every_n_sets_threshold_and_resets_counter(
+    db_session, session_factory, singleton_user
+):
+    from app.services.alerts import create_alert, get_alert, update_alert
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="update-every-to-every-n.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        await session.commit()
+
+        alert = await create_alert(
+            session, project_id=project.id, event_name="signup", condition=AlertCondition.every
+        )
+        await session.commit()
+
+        alert.counter = 3
+        await session.flush()
+        await session.commit()
+
+        updated = await update_alert(
+            session,
+            alert.id,
+            project.id,
+            condition=AlertCondition.every_n,
+            threshold_n=5,
+        )
+        await session.commit()
+        assert updated is not None
+        assert updated.condition == AlertCondition.every_n
+        assert updated.threshold_n == 5
+        assert updated.counter == 0
+
+    async with session_factory() as session:
+        reread = await get_alert(session, alert.id, project.id)
+        assert reread is not None
+        assert reread.condition == AlertCondition.every_n
+        assert reread.threshold_n == 5
+        assert reread.counter == 0
+
+
+async def test_update_alert_to_every_clears_threshold(db_session, session_factory, singleton_user):
+    from app.services.alerts import create_alert, get_alert, update_alert
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="update-to-every.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        await session.commit()
+
+        alert = await create_alert(
+            session,
+            project_id=project.id,
+            event_name="purchase",
+            condition=AlertCondition.every_n,
+            threshold_n=10,
+        )
+        await session.commit()
+
+        updated = await update_alert(
+            session,
+            alert.id,
+            project.id,
+            condition=AlertCondition.every,
+            threshold_n=10,
+        )
+        await session.commit()
+        assert updated is not None
+        assert updated.condition == AlertCondition.every
+        assert updated.threshold_n is None
+
+    async with session_factory() as session:
+        reread = await get_alert(session, alert.id, project.id)
+        assert reread is not None
+        assert reread.condition == AlertCondition.every
+        assert reread.threshold_n is None
+
+
+async def test_update_alert_returns_none_for_wrong_project(
+    db_session, session_factory, singleton_user
+):
+    from app.services.alerts import create_alert, get_alert, update_alert
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project_a, _ = await create_project(
+            session,
+            name="update-wrong-project-a.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        project_b, _ = await create_project(
+            session,
+            name="update-wrong-project-b.com",
+            admin_chat_id=ADMIN_ID + 1,
+            owner_user_id=singleton_user.id,
+        )
+        await session.commit()
+
+        alert = await create_alert(
+            session,
+            project_id=project_a.id,
+            event_name="signup",
+            condition=AlertCondition.every,
+        )
+        await session.commit()
+
+        result = await update_alert(
+            session,
+            alert.id,
+            project_b.id,
+            condition=AlertCondition.every_n,
+            threshold_n=5,
+        )
+        await session.commit()
+        assert result is None
+
+    async with session_factory() as session:
+        reread = await get_alert(session, alert.id, project_a.id)
+        assert reread is not None
+        assert reread.condition == AlertCondition.every
+        assert reread.threshold_n is None
+
+
+async def test_update_alert_requires_threshold_for_every_n(
+    db_session, session_factory, singleton_user
+):
+    from app.services.alerts import create_alert, update_alert
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session,
+            name="update-requires-threshold.com",
+            admin_chat_id=ADMIN_ID,
+            owner_user_id=singleton_user.id,
+        )
+        await session.commit()
+
+        alert = await create_alert(
+            session, project_id=project.id, event_name="signup", condition=AlertCondition.every
+        )
+        await session.commit()
+
+        with pytest.raises(ValueError):
+            await update_alert(
+                session,
+                alert.id,
+                project.id,
+                condition=AlertCondition.every_n,
+                threshold_n=None,
+            )
+
+        with pytest.raises(ValueError):
+            await update_alert(
+                session,
+                alert.id,
+                project.id,
+                condition=AlertCondition.every_n,
+                threshold_n=0,
+            )
 
 
 # ── Bot callback handlers ──────────────────────────────────────────────────────
