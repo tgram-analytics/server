@@ -1763,3 +1763,44 @@ async def test_no_notification_when_no_alerts_fire(db_session, session_factory, 
         await _run_alert_evaluation(pid, "some_event")
 
     mock_bot.send_message.assert_not_called()
+
+
+# ── Alert delivery history ────────────────────────────────────────────────────
+
+
+async def test_alert_delivery_model_roundtrip(singleton_user, db_session):
+    """AlertDelivery rows persist a snapshot of the alert that fired."""
+    from app.models.alert_delivery import AlertDelivery
+    from app.services.alerts import create_alert
+    from app.services.projects import create_project
+
+    project, _ = await create_project(
+        db_session,
+        name="delivery-model.com",
+        admin_chat_id=ADMIN_ID,
+        owner_user_id=singleton_user.id,
+    )
+    alert = await create_alert(
+        db_session,
+        project_id=project.id,
+        event_name="signup",
+        condition=AlertCondition.every_n,
+        threshold_n=10,
+    )
+    row = AlertDelivery(
+        alert_id=alert.id,
+        project_id=project.id,
+        event_name=alert.event_name,
+        condition=alert.condition,
+        threshold_n=alert.threshold_n,
+        delivered=True,
+    )
+    db_session.add(row)
+    await db_session.flush()
+    await db_session.refresh(row)
+
+    assert row.id is not None
+    assert row.fired_at is not None
+    assert row.error is None
+    assert row.condition == AlertCondition.every_n
+    assert row.threshold_n == 10
