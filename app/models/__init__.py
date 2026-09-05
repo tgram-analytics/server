@@ -7,6 +7,7 @@ All models are imported here so that:
 
 from app.models.aggregation import Aggregation, AggregationPeriod
 from app.models.alert import Alert, AlertCondition
+from app.models.alert_delivery import AlertDelivery
 from app.models.bot_conversation_state import BotConversationState
 from app.models.event import Event
 from app.models.funnel import Funnel
@@ -27,6 +28,7 @@ __all__ = [
     "AggregationPeriod",
     "Alert",
     "AlertCondition",
+    "AlertDelivery",
     "Funnel",
     "MCPSelfhostOAuthClient",
     "MCPSelfhostOAuthCode",
