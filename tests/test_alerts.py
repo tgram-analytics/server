@@ -1805,6 +1805,12 @@ async def test_alert_delivery_model_roundtrip(singleton_user, db_session):
     assert row.condition == AlertCondition.every_n
     assert row.threshold_n == 10
 
+    # History survives alert deletion: FK is ON DELETE SET NULL.
+    await db_session.delete(alert)
+    await db_session.flush()
+    await db_session.refresh(row)
+    assert row.alert_id is None
+
 
 async def _seed_project_and_alert(session, owner_id, *, name, event_name="buy"):
     from app.services.alerts import create_alert
