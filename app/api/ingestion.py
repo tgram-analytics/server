@@ -234,8 +234,20 @@ async def _run_alert_evaluation(
                         project_id,
                     )
                 # History row lives in the same transaction as the counter
-                # update, so a fired alert is never recorded twice or lost.
-                await record_delivery(session, alert=alert, delivered=delivered, error=send_error)
+                # update, so row and counters always commit or roll back
+                # together. A failed INSERT must not stop the remaining
+                # notifications, hence the savepoint.
+                try:
+                    async with session.begin_nested():
+                        await record_delivery(
+                            session, alert=alert, delivered=delivered, error=send_error
+                        )
+                except Exception:
+                    log.exception(
+                        "failed to record alert delivery: alert=%s project=%s",
+                        alert.id,
+                        project_id,
+                    )
     except Exception:
         log.exception("alert evaluation failed for project=%s event=%s", project_id, event_name)
 

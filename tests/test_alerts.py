@@ -1973,3 +1973,54 @@ async def test_notification_failure_records_undelivered(
     assert len(rows) == 1
     assert rows[0].delivered is False
     assert rows[0].error == "RuntimeError"
+
+
+async def test_delivery_record_failure_does_not_stop_other_alerts(
+    db_session, session_factory, singleton_user
+):
+    """A failing history INSERT is logged and the remaining alerts still notify."""
+    from sqlalchemy import select
+
+    from app.api.ingestion import _run_alert_evaluation
+    from app.models.alert import Alert
+    from app.models.alert_delivery import AlertDelivery
+    from app.services.alerts import create_alert
+
+    async with session_factory() as session:
+        project, _ = await _seed_project_and_alert(
+            session, singleton_user.id, name="deliv-guard.com", event_name="guard_event"
+        )
+        # Second alert on the same event so the loop has two iterations.
+        await create_alert(
+            session,
+            project_id=project.id,
+            event_name="guard_event",
+            condition=AlertCondition.every,
+        )
+        await session.commit()
+        pid = project.id
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+    with (
+        patch("app.api.ingestion.get_session_factory", return_value=session_factory),
+        patch("app.bot.setup.get_bot", return_value=mock_bot),
+        patch(
+            "app.services.alerts.record_delivery",
+            AsyncMock(side_effect=RuntimeError("history table unavailable")),
+        ),
+    ):
+        await _run_alert_evaluation(pid, "guard_event")
+
+    assert mock_bot.send_message.await_count == 2
+    async with session_factory() as session:
+        rows = (
+            (await session.execute(select(AlertDelivery).where(AlertDelivery.project_id == pid)))
+            .scalars()
+            .all()
+        )
+        alerts = (
+            (await session.execute(select(Alert).where(Alert.project_id == pid))).scalars().all()
+        )
+    assert rows == []
+    assert len(alerts) == 2
