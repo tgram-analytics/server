@@ -579,28 +579,26 @@ In `app/api/ingestion.py`, inside `_run_alert_evaluation`, replace this block:
 with:
 
 ```python
-                delivered = True
-                send_error: str | None = None
-                try:
-                    await bot.send_message(
-                        chat_id=project.admin_chat_id,
-                        text=msg,
-                        parse_mode="HTML",
-                        reply_markup=keyboard,
-                    )
-                except Exception as exc:
-                    delivered = False
-                    send_error = type(exc).__name__
-                    log.exception(
-                        "failed to send alert notification: alert=%s project=%s",
-                        alert.id,
-                        project_id,
-                    )
-                # History row lives in the same transaction as the counter
-                # update, so a fired alert is never recorded twice or lost.
-                await record_delivery(
-                    session, alert=alert, delivered=delivered, error=send_error
-                )
+delivered = True
+send_error: str | None = None
+try:
+    await bot.send_message(
+        chat_id=project.admin_chat_id,
+        text=msg,
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+except Exception as exc:
+    delivered = False
+    send_error = type(exc).__name__
+    log.exception(
+        "failed to send alert notification: alert=%s project=%s",
+        alert.id,
+        project_id,
+    )
+# History row lives in the same transaction as the counter
+# update, so a fired alert is never recorded twice or lost.
+await record_delivery(session, alert=alert, delivered=delivered, error=send_error)
 ```
 
 Add the import inside the function, next to the existing local imports at the top of `_run_alert_evaluation`:
@@ -750,7 +748,15 @@ from app.models.alert import AlertCondition
 from tests.mcp.conftest import _make_token
 
 
-def _alert_obj(aid, pid, *, event_name="purchase", condition=AlertCondition.every, threshold_n=None, is_active=True):
+def _alert_obj(
+    aid,
+    pid,
+    *,
+    event_name="purchase",
+    condition=AlertCondition.every,
+    threshold_n=None,
+    is_active=True,
+):
     return SimpleNamespace(
         id=aid,
         project_id=pid,
@@ -795,7 +801,11 @@ def not_owned(monkeypatch):
 
 
 def _is_error(result) -> bool:
-    return isinstance(result, list) and isinstance(result[0], TextContent) and result[0].isError is True
+    return (
+        isinstance(result, list)
+        and isinstance(result[0], TextContent)
+        and result[0].isError is True
+    )
 
 
 # ── list_alerts ─────────────────────────────────────────────────────────────
@@ -816,7 +826,14 @@ async def test_list_alerts_invalid_uuid(fresh_mcp, call_tool, set_auth_token, us
 
 
 async def test_list_alerts_cross_user(
-    fresh_mcp, call_tool, set_auth_token, patch_open_session, not_owned, monkeypatch, project_a_id, user_b_id
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    patch_open_session,
+    not_owned,
+    monkeypatch,
+    project_a_id,
+    user_b_id,
 ):
     svc = AsyncMock(return_value=[])
     monkeypatch.setattr("app.services.alerts.list_alerts", svc)
@@ -827,10 +844,21 @@ async def test_list_alerts_cross_user(
 
 
 async def test_list_alerts_happy_path(
-    fresh_mcp, call_tool, set_auth_token, patch_open_session, owned, monkeypatch, project_a_id, user_a_id
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    patch_open_session,
+    owned,
+    monkeypatch,
+    project_a_id,
+    user_a_id,
 ):
     aid = uuid.uuid4()
-    svc = AsyncMock(return_value=[_alert_obj(aid, project_a_id, condition=AlertCondition.every_n, threshold_n=5)])
+    svc = AsyncMock(
+        return_value=[
+            _alert_obj(aid, project_a_id, condition=AlertCondition.every_n, threshold_n=5)
+        ]
+    )
     monkeypatch.setattr("app.services.alerts.list_alerts", svc)
     with set_auth_token(_make_token(user_a_id)):
         result = await call_tool(fresh_mcp, "list_alerts", project_id=str(project_a_id))
@@ -865,7 +893,9 @@ async def test_alert_history_bad_period(
     fresh_mcp, call_tool, set_auth_token, patch_open_session, owned, user_a_id, project_a_id
 ):
     with set_auth_token(_make_token(user_a_id)):
-        result = await call_tool(fresh_mcp, "alert_history", project_id=str(project_a_id), period="2w")
+        result = await call_tool(
+            fresh_mcp, "alert_history", project_id=str(project_a_id), period="2w"
+        )
     assert _is_error(result)
     assert "unsupported period" in result[0].text
 
@@ -880,7 +910,14 @@ async def test_alert_history_bad_limit(
 
 
 async def test_alert_history_cross_user(
-    fresh_mcp, call_tool, set_auth_token, patch_open_session, not_owned, monkeypatch, project_a_id, user_b_id
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    patch_open_session,
+    not_owned,
+    monkeypatch,
+    project_a_id,
+    user_b_id,
 ):
     svc = AsyncMock(return_value=[])
     monkeypatch.setattr("app.services.alerts.list_deliveries", svc)
@@ -891,14 +928,28 @@ async def test_alert_history_cross_user(
 
 
 async def test_alert_history_happy_path(
-    fresh_mcp, call_tool, set_auth_token, patch_open_session, owned, monkeypatch, project_a_id, user_a_id
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    patch_open_session,
+    owned,
+    monkeypatch,
+    project_a_id,
+    user_a_id,
 ):
     did, aid = uuid.uuid4(), uuid.uuid4()
-    svc = AsyncMock(return_value=[_delivery_obj(did, aid, project_a_id, delivered=False, error="TimedOut")])
+    svc = AsyncMock(
+        return_value=[_delivery_obj(did, aid, project_a_id, delivered=False, error="TimedOut")]
+    )
     monkeypatch.setattr("app.services.alerts.list_deliveries", svc)
     with set_auth_token(_make_token(user_a_id)):
         result = await call_tool(
-            fresh_mcp, "alert_history", project_id=str(project_a_id), period="30d", limit=5, event_name="purchase"
+            fresh_mcp,
+            "alert_history",
+            project_id=str(project_a_id),
+            period="30d",
+            limit=5,
+            event_name="purchase",
         )
     assert result["project_id"] == str(project_a_id)
     assert result["period"] == "30d"
@@ -1184,32 +1235,58 @@ Append to `tests/mcp/test_alert_tools.py`:
 async def test_create_alert_no_token(fresh_mcp, call_tool, set_auth_token, project_a_id):
     with set_auth_token(None):
         result = await call_tool(
-            fresh_mcp, "create_alert", project_id=str(project_a_id), event_name="x", condition="every"
+            fresh_mcp,
+            "create_alert",
+            project_id=str(project_a_id),
+            event_name="x",
+            condition="every",
         )
     assert _is_error(result)
 
 
 async def test_create_alert_cross_user(
-    fresh_mcp, call_tool, set_auth_token, patch_open_session, not_owned, monkeypatch, project_a_id, user_b_id
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    patch_open_session,
+    not_owned,
+    monkeypatch,
+    project_a_id,
+    user_b_id,
 ):
     svc = AsyncMock()
     monkeypatch.setattr("app.services.alerts.create_alert", svc)
     with set_auth_token(_make_token(user_b_id)):
         result = await call_tool(
-            fresh_mcp, "create_alert", project_id=str(project_a_id), event_name="x", condition="every"
+            fresh_mcp,
+            "create_alert",
+            project_id=str(project_a_id),
+            event_name="x",
+            condition="every",
         )
     assert _is_error(result)
     svc.assert_not_awaited()
 
 
 async def test_create_alert_every_n_requires_threshold(
-    fresh_mcp, call_tool, set_auth_token, patch_open_session, owned, monkeypatch, project_a_id, user_a_id
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    patch_open_session,
+    owned,
+    monkeypatch,
+    project_a_id,
+    user_a_id,
 ):
     svc = AsyncMock()
     monkeypatch.setattr("app.services.alerts.create_alert", svc)
     with set_auth_token(_make_token(user_a_id)):
         result = await call_tool(
-            fresh_mcp, "create_alert", project_id=str(project_a_id), event_name="signup", condition="every_n"
+            fresh_mcp,
+            "create_alert",
+            project_id=str(project_a_id),
+            event_name="signup",
+            condition="every_n",
         )
     assert _is_error(result)
     assert "threshold_n is required" in result[0].text
@@ -1221,17 +1298,33 @@ async def test_create_alert_bad_condition(
 ):
     with set_auth_token(_make_token(user_a_id)):
         result = await call_tool(
-            fresh_mcp, "create_alert", project_id=str(project_a_id), event_name="signup", condition="sometimes"
+            fresh_mcp,
+            "create_alert",
+            project_id=str(project_a_id),
+            event_name="signup",
+            condition="sometimes",
         )
     assert _is_error(result)
     assert "condition" in result[0].text
 
 
 async def test_create_alert_happy_path(
-    fresh_mcp, call_tool, set_auth_token, patch_open_session, owned, monkeypatch, project_a_id, user_a_id, mock_session
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    patch_open_session,
+    owned,
+    monkeypatch,
+    project_a_id,
+    user_a_id,
+    mock_session,
 ):
     aid = uuid.uuid4()
-    svc = AsyncMock(return_value=_alert_obj(aid, project_a_id, event_name="signup", condition=AlertCondition.every_n, threshold_n=10))
+    svc = AsyncMock(
+        return_value=_alert_obj(
+            aid, project_a_id, event_name="signup", condition=AlertCondition.every_n, threshold_n=10
+        )
+    )
     monkeypatch.setattr("app.services.alerts.create_alert", svc)
     with set_auth_token(_make_token(user_a_id)):
         result = await call_tool(
@@ -1260,7 +1353,11 @@ async def test_create_alert_happy_path(
 async def test_set_alert_active_no_token(fresh_mcp, call_tool, set_auth_token, project_a_id):
     with set_auth_token(None):
         result = await call_tool(
-            fresh_mcp, "set_alert_active", project_id=str(project_a_id), alert_id=str(uuid.uuid4()), is_active=False
+            fresh_mcp,
+            "set_alert_active",
+            project_id=str(project_a_id),
+            alert_id=str(uuid.uuid4()),
+            is_active=False,
         )
     assert _is_error(result)
 
@@ -1270,47 +1367,85 @@ async def test_set_alert_active_bad_alert_uuid(
 ):
     with set_auth_token(_make_token(user_a_id)):
         result = await call_tool(
-            fresh_mcp, "set_alert_active", project_id=str(project_a_id), alert_id="nope", is_active=False
+            fresh_mcp,
+            "set_alert_active",
+            project_id=str(project_a_id),
+            alert_id="nope",
+            is_active=False,
         )
     assert _is_error(result)
     assert "alert_id" in result[0].text
 
 
 async def test_set_alert_active_cross_user(
-    fresh_mcp, call_tool, set_auth_token, patch_open_session, not_owned, monkeypatch, project_a_id, user_b_id
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    patch_open_session,
+    not_owned,
+    monkeypatch,
+    project_a_id,
+    user_b_id,
 ):
     svc = AsyncMock()
     monkeypatch.setattr("app.services.alerts.set_alert_active", svc)
     with set_auth_token(_make_token(user_b_id)):
         result = await call_tool(
-            fresh_mcp, "set_alert_active", project_id=str(project_a_id), alert_id=str(uuid.uuid4()), is_active=False
+            fresh_mcp,
+            "set_alert_active",
+            project_id=str(project_a_id),
+            alert_id=str(uuid.uuid4()),
+            is_active=False,
         )
     assert _is_error(result)
     svc.assert_not_awaited()
 
 
 async def test_set_alert_active_not_found(
-    fresh_mcp, call_tool, set_auth_token, patch_open_session, owned, monkeypatch, project_a_id, user_a_id
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    patch_open_session,
+    owned,
+    monkeypatch,
+    project_a_id,
+    user_a_id,
 ):
     monkeypatch.setattr("app.services.alerts.set_alert_active", AsyncMock(return_value=None))
     aid = uuid.uuid4()
     with set_auth_token(_make_token(user_a_id)):
         result = await call_tool(
-            fresh_mcp, "set_alert_active", project_id=str(project_a_id), alert_id=str(aid), is_active=False
+            fresh_mcp,
+            "set_alert_active",
+            project_id=str(project_a_id),
+            alert_id=str(aid),
+            is_active=False,
         )
     assert _is_error(result)
     assert f"alert {aid} not found" in result[0].text
 
 
 async def test_set_alert_active_happy_path(
-    fresh_mcp, call_tool, set_auth_token, patch_open_session, owned, monkeypatch, project_a_id, user_a_id, mock_session
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    patch_open_session,
+    owned,
+    monkeypatch,
+    project_a_id,
+    user_a_id,
+    mock_session,
 ):
     aid = uuid.uuid4()
     svc = AsyncMock(return_value=_alert_obj(aid, project_a_id, is_active=False))
     monkeypatch.setattr("app.services.alerts.set_alert_active", svc)
     with set_auth_token(_make_token(user_a_id)):
         result = await call_tool(
-            fresh_mcp, "set_alert_active", project_id=str(project_a_id), alert_id=str(aid), is_active=False
+            fresh_mcp,
+            "set_alert_active",
+            project_id=str(project_a_id),
+            alert_id=str(aid),
+            is_active=False,
         )
     assert result["id"] == str(aid)
     assert result["is_active"] is False
@@ -1332,7 +1467,14 @@ async def test_delete_alert_no_token(fresh_mcp, call_tool, set_auth_token, proje
 
 
 async def test_delete_alert_cross_user(
-    fresh_mcp, call_tool, set_auth_token, patch_open_session, not_owned, monkeypatch, project_a_id, user_b_id
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    patch_open_session,
+    not_owned,
+    monkeypatch,
+    project_a_id,
+    user_b_id,
 ):
     svc = AsyncMock()
     monkeypatch.setattr("app.services.alerts.delete_alert", svc)
@@ -1345,21 +1487,38 @@ async def test_delete_alert_cross_user(
 
 
 async def test_delete_alert_not_found(
-    fresh_mcp, call_tool, set_auth_token, patch_open_session, owned, monkeypatch, project_a_id, user_a_id
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    patch_open_session,
+    owned,
+    monkeypatch,
+    project_a_id,
+    user_a_id,
 ):
     monkeypatch.setattr("app.services.alerts.get_alert", AsyncMock(return_value=None))
     audit = AsyncMock()
     monkeypatch.setattr("app.services.audit.write_audit", audit)
     aid = uuid.uuid4()
     with set_auth_token(_make_token(user_a_id)):
-        result = await call_tool(fresh_mcp, "delete_alert", project_id=str(project_a_id), alert_id=str(aid))
+        result = await call_tool(
+            fresh_mcp, "delete_alert", project_id=str(project_a_id), alert_id=str(aid)
+        )
     assert _is_error(result)
     assert f"alert {aid} not found" in result[0].text
     audit.assert_not_awaited()
 
 
 async def test_delete_alert_happy_path_writes_audit(
-    fresh_mcp, call_tool, set_auth_token, patch_open_session, owned, monkeypatch, project_a_id, user_a_id, mock_session
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    patch_open_session,
+    owned,
+    monkeypatch,
+    project_a_id,
+    user_a_id,
+    mock_session,
 ):
     aid = uuid.uuid4()
     monkeypatch.setattr(
@@ -1372,7 +1531,9 @@ async def test_delete_alert_happy_path_writes_audit(
     monkeypatch.setattr("app.services.audit.write_audit", audit)
 
     with set_auth_token(_make_token(user_a_id)):
-        result = await call_tool(fresh_mcp, "delete_alert", project_id=str(project_a_id), alert_id=str(aid))
+        result = await call_tool(
+            fresh_mcp, "delete_alert", project_id=str(project_a_id), alert_id=str(aid)
+        )
 
     assert result == {"deleted": True, "alert_id": str(aid)}
     delete_svc.assert_awaited_once()
@@ -1416,140 +1577,144 @@ Expected: the new tests FAIL with `KeyError`/`Unknown tool: create_alert` (from 
 Append inside `register_alert_tools` in `app/mcp/tools/alerts.py`, after `alert_history`:
 
 ```python
-    @mcp.tool(title="Create alert", annotations=_CREATE)
-    async def create_alert(
-        project_id: str,
-        event_name: str,
-        condition: str,
-        threshold_n: int | None = None,
-    ) -> list[TextContent] | AlertInfo:
-        """Create an alert on *project_id*. The user gets a Telegram message when it fires.
+@mcp.tool(title="Create alert", annotations=_CREATE)
+async def create_alert(
+    project_id: str,
+    event_name: str,
+    condition: str,
+    threshold_n: int | None = None,
+) -> list[TextContent] | AlertInfo:
+    """Create an alert on *project_id*. The user gets a Telegram message when it fires.
 
-        ``condition``: ``every`` (ping on each event), ``every_n`` (ping
-        every N-th event; needs ``threshold_n``), ``threshold`` (ping once
-        per day when the daily count reaches N; needs ``threshold_n``).
-        Prefer ``every_n`` or ``threshold`` for high-volume events such as
-        ``pageview``.
-        """
-        token = get_access_token()
-        if token is None or not isinstance(token, MCPAccessToken):
-            return _not_authenticated()
-        pid = _parse_uuid(project_id, "project_id")
-        if pid is None:
-            return _error(f"invalid project_id {project_id!r}; must be a UUID")
-        owner_user_id = uuid.UUID(token.extra["user_id"])
+    ``condition``: ``every`` (ping on each event), ``every_n`` (ping
+    every N-th event; needs ``threshold_n``), ``threshold`` (ping once
+    per day when the daily count reaches N; needs ``threshold_n``).
+    Prefer ``every_n`` or ``threshold`` for high-volume events such as
+    ``pageview``.
+    """
+    token = get_access_token()
+    if token is None or not isinstance(token, MCPAccessToken):
+        return _not_authenticated()
+    pid = _parse_uuid(project_id, "project_id")
+    if pid is None:
+        return _error(f"invalid project_id {project_id!r}; must be a UUID")
+    owner_user_id = uuid.UUID(token.extra["user_id"])
 
-        from app.schemas.alert import AlertCreate
-        from app.services.alerts import create_alert as svc_create_alert
+    from app.schemas.alert import AlertCreate
+    from app.services.alerts import create_alert as svc_create_alert
 
+    try:
+        body = AlertCreate(
+            project_id=pid,
+            event_name=event_name,
+            condition=condition,  # type: ignore[arg-type]
+            threshold_n=threshold_n,
+        )
+    except ValidationError as exc:
+        msgs = "; ".join(
+            f"{'.'.join(str(p) for p in e['loc']) or 'input'}: {e['msg']}" for e in exc.errors()
+        )
+        return _error(f"invalid alert: {msgs}")
+
+    async with open_session() as session:
         try:
-            body = AlertCreate(
-                project_id=pid,
-                event_name=event_name,
-                condition=condition,  # type: ignore[arg-type]
-                threshold_n=threshold_n,
-            )
-        except ValidationError as exc:
-            msgs = "; ".join(f"{'.'.join(str(p) for p in e['loc']) or 'input'}: {e['msg']}" for e in exc.errors())
-            return _error(f"invalid alert: {msgs}")
+            await assert_project_owned_by(session, pid, owner_user_id)
+        except ProjectNotOwnedError:
+            return _not_owned_error(project_id)
+        alert = await svc_create_alert(
+            session,
+            project_id=pid,
+            event_name=body.event_name,
+            condition=body.condition,
+            threshold_n=body.threshold_n,
+        )
+        await session.commit()
 
-        async with open_session() as session:
-            try:
-                await assert_project_owned_by(session, pid, owner_user_id)
-            except ProjectNotOwnedError:
-                return _not_owned_error(project_id)
-            alert = await svc_create_alert(
-                session,
-                project_id=pid,
-                event_name=body.event_name,
-                condition=body.condition,
-                threshold_n=body.threshold_n,
-            )
-            await session.commit()
+    logger.info("created alert %s on project_id=%s via mcp", alert.id, pid)
+    return _alert_to_info(alert)
 
-        logger.info("created alert %s on project_id=%s via mcp", alert.id, pid)
-        return _alert_to_info(alert)
 
-    @mcp.tool(title="Pause or resume alert", annotations=_SET_ACTIVE)
-    async def set_alert_active(
-        project_id: str,
-        alert_id: str,
-        is_active: bool,
-    ) -> list[TextContent] | AlertInfo:
-        """Set an alert active (``true``) or paused (``false``). Idempotent."""
-        token = get_access_token()
-        if token is None or not isinstance(token, MCPAccessToken):
-            return _not_authenticated()
-        pid = _parse_uuid(project_id, "project_id")
-        if pid is None:
-            return _error(f"invalid project_id {project_id!r}; must be a UUID")
-        aid = _parse_uuid(alert_id, "alert_id")
-        if aid is None:
-            return _error(f"invalid alert_id {alert_id!r}; must be a UUID")
-        owner_user_id = uuid.UUID(token.extra["user_id"])
+@mcp.tool(title="Pause or resume alert", annotations=_SET_ACTIVE)
+async def set_alert_active(
+    project_id: str,
+    alert_id: str,
+    is_active: bool,
+) -> list[TextContent] | AlertInfo:
+    """Set an alert active (``true``) or paused (``false``). Idempotent."""
+    token = get_access_token()
+    if token is None or not isinstance(token, MCPAccessToken):
+        return _not_authenticated()
+    pid = _parse_uuid(project_id, "project_id")
+    if pid is None:
+        return _error(f"invalid project_id {project_id!r}; must be a UUID")
+    aid = _parse_uuid(alert_id, "alert_id")
+    if aid is None:
+        return _error(f"invalid alert_id {alert_id!r}; must be a UUID")
+    owner_user_id = uuid.UUID(token.extra["user_id"])
 
-        from app.services.alerts import set_alert_active as svc_set_alert_active
+    from app.services.alerts import set_alert_active as svc_set_alert_active
 
-        async with open_session() as session:
-            try:
-                await assert_project_owned_by(session, pid, owner_user_id)
-            except ProjectNotOwnedError:
-                return _not_owned_error(project_id)
-            alert = await svc_set_alert_active(session, aid, pid, is_active=is_active)
-            if alert is None:
-                return _error(f"alert {alert_id} not found on project {project_id}")
-            await session.commit()
+    async with open_session() as session:
+        try:
+            await assert_project_owned_by(session, pid, owner_user_id)
+        except ProjectNotOwnedError:
+            return _not_owned_error(project_id)
+        alert = await svc_set_alert_active(session, aid, pid, is_active=is_active)
+        if alert is None:
+            return _error(f"alert {alert_id} not found on project {project_id}")
+        await session.commit()
 
-        return _alert_to_info(alert)
+    return _alert_to_info(alert)
 
-    @mcp.tool(title="Delete alert", annotations=_DELETE)
-    async def delete_alert(
-        project_id: str,
-        alert_id: str,
-    ) -> list[TextContent] | DeleteAlertResult:
-        """Delete an alert. History rows in ``alert_history`` are kept."""
-        token = get_access_token()
-        if token is None or not isinstance(token, MCPAccessToken):
-            return _not_authenticated()
-        pid = _parse_uuid(project_id, "project_id")
-        if pid is None:
-            return _error(f"invalid project_id {project_id!r}; must be a UUID")
-        aid = _parse_uuid(alert_id, "alert_id")
-        if aid is None:
-            return _error(f"invalid alert_id {alert_id!r}; must be a UUID")
-        owner_user_id = uuid.UUID(token.extra["user_id"])
 
-        from app.services.alerts import delete_alert as svc_delete_alert
-        from app.services.alerts import get_alert
-        from app.services.audit import write_audit
+@mcp.tool(title="Delete alert", annotations=_DELETE)
+async def delete_alert(
+    project_id: str,
+    alert_id: str,
+) -> list[TextContent] | DeleteAlertResult:
+    """Delete an alert. History rows in ``alert_history`` are kept."""
+    token = get_access_token()
+    if token is None or not isinstance(token, MCPAccessToken):
+        return _not_authenticated()
+    pid = _parse_uuid(project_id, "project_id")
+    if pid is None:
+        return _error(f"invalid project_id {project_id!r}; must be a UUID")
+    aid = _parse_uuid(alert_id, "alert_id")
+    if aid is None:
+        return _error(f"invalid alert_id {alert_id!r}; must be a UUID")
+    owner_user_id = uuid.UUID(token.extra["user_id"])
 
-        async with open_session() as session:
-            try:
-                await assert_project_owned_by(session, pid, owner_user_id)
-            except ProjectNotOwnedError:
-                return _not_owned_error(project_id)
-            alert = await get_alert(session, aid, pid)
-            if alert is None:
-                return _error(f"alert {alert_id} not found on project {project_id}")
-            snapshot = {
-                "project_id": str(pid),
-                "event_name": alert.event_name,
-                "condition": str(getattr(alert.condition, "value", alert.condition)),
-                "via": "mcp",
-            }
-            deleted = await svc_delete_alert(session, aid, pid)
-            await write_audit(
-                session,
-                user_id=owner_user_id,
-                action="alert.delete",
-                target_type="alert",
-                target_id=str(aid),
-                metadata=snapshot,
-            )
-            await session.commit()
+    from app.services.alerts import delete_alert as svc_delete_alert
+    from app.services.alerts import get_alert
+    from app.services.audit import write_audit
 
-        logger.info("deleted alert %s on project_id=%s via mcp", aid, pid)
-        return DeleteAlertResult(deleted=bool(deleted), alert_id=str(aid))
+    async with open_session() as session:
+        try:
+            await assert_project_owned_by(session, pid, owner_user_id)
+        except ProjectNotOwnedError:
+            return _not_owned_error(project_id)
+        alert = await get_alert(session, aid, pid)
+        if alert is None:
+            return _error(f"alert {alert_id} not found on project {project_id}")
+        snapshot = {
+            "project_id": str(pid),
+            "event_name": alert.event_name,
+            "condition": str(getattr(alert.condition, "value", alert.condition)),
+            "via": "mcp",
+        }
+        deleted = await svc_delete_alert(session, aid, pid)
+        await write_audit(
+            session,
+            user_id=owner_user_id,
+            action="alert.delete",
+            target_type="alert",
+            target_id=str(aid),
+            metadata=snapshot,
+        )
+        await session.commit()
+
+    logger.info("deleted alert %s on project_id=%s via mcp", aid, pid)
+    return DeleteAlertResult(deleted=bool(deleted), alert_id=str(aid))
 ```
 
 Remove any temporary `# noqa: F401` added in Task 5.
@@ -1616,11 +1781,11 @@ In `tests/mcp/test_tool_annotations.py`, append to `EXPECTED` before the closing
 In `tests/mcp/test_tool_output_schema.py`, append to `ALL_TOOLS`:
 
 ```python
-    "list_alerts",
-    "alert_history",
-    "create_alert",
-    "set_alert_active",
-    "delete_alert",
+("list_alerts",)
+("alert_history",)
+("create_alert",)
+("set_alert_active",)
+("delete_alert",)
 ```
 
 - [ ] **Step 3: Run the contract tests**
