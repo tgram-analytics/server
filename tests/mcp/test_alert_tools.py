@@ -270,6 +270,7 @@ async def test_create_alert_cross_user(
     monkeypatch,
     project_a_id,
     user_b_id,
+    mock_session,
 ):
     svc = AsyncMock()
     monkeypatch.setattr("app.services.alerts.create_alert", svc)
@@ -283,6 +284,7 @@ async def test_create_alert_cross_user(
         )
     assert _is_error(result)
     svc.assert_not_awaited()
+    mock_session.commit.assert_not_awaited()
 
 
 async def test_create_alert_every_n_requires_threshold(
@@ -407,6 +409,7 @@ async def test_set_alert_active_cross_user(
     monkeypatch,
     project_a_id,
     user_b_id,
+    mock_session,
 ):
     svc = AsyncMock()
     monkeypatch.setattr("app.services.alerts.set_alert_active", svc)
@@ -420,6 +423,7 @@ async def test_set_alert_active_cross_user(
         )
     assert _is_error(result)
     svc.assert_not_awaited()
+    mock_session.commit.assert_not_awaited()
 
 
 async def test_set_alert_active_not_found(
@@ -431,6 +435,7 @@ async def test_set_alert_active_not_found(
     monkeypatch,
     project_a_id,
     user_a_id,
+    mock_session,
 ):
     monkeypatch.setattr("app.services.alerts.set_alert_active", AsyncMock(return_value=None))
     aid = uuid.uuid4()
@@ -444,6 +449,7 @@ async def test_set_alert_active_not_found(
         )
     assert _is_error(result)
     assert f"alert {aid} not found" in result[0].text
+    mock_session.commit.assert_not_awaited()
 
 
 async def test_set_alert_active_happy_path(
@@ -496,6 +502,7 @@ async def test_delete_alert_cross_user(
     monkeypatch,
     project_a_id,
     user_b_id,
+    mock_session,
 ):
     svc = AsyncMock()
     monkeypatch.setattr("app.services.alerts.delete_alert", svc)
@@ -505,6 +512,7 @@ async def test_delete_alert_cross_user(
         )
     assert _is_error(result)
     svc.assert_not_awaited()
+    mock_session.commit.assert_not_awaited()
 
 
 async def test_delete_alert_not_found(
@@ -516,6 +524,7 @@ async def test_delete_alert_not_found(
     monkeypatch,
     project_a_id,
     user_a_id,
+    mock_session,
 ):
     monkeypatch.setattr("app.services.alerts.get_alert", AsyncMock(return_value=None))
     audit = AsyncMock()
@@ -528,6 +537,7 @@ async def test_delete_alert_not_found(
     assert _is_error(result)
     assert f"alert {aid} not found" in result[0].text
     audit.assert_not_awaited()
+    mock_session.commit.assert_not_awaited()
 
 
 async def test_delete_alert_happy_path_writes_audit(
@@ -572,3 +582,92 @@ async def test_delete_alert_happy_path_writes_audit(
         "via": "mcp",
     }
     mock_session.commit.assert_awaited_once()
+
+
+async def test_create_alert_invalid_project_uuid(fresh_mcp, call_tool, set_auth_token, user_a_id):
+    with set_auth_token(_make_token(user_a_id)):
+        result = await call_tool(
+            fresh_mcp, "create_alert", project_id="nope", event_name="x", condition="every"
+        )
+    assert _is_error(result)
+    assert "must be a UUID" in result[0].text
+
+
+async def test_set_alert_active_invalid_project_uuid(
+    fresh_mcp, call_tool, set_auth_token, user_a_id
+):
+    with set_auth_token(_make_token(user_a_id)):
+        result = await call_tool(
+            fresh_mcp,
+            "set_alert_active",
+            project_id="nope",
+            alert_id=str(uuid.uuid4()),
+            is_active=False,
+        )
+    assert _is_error(result)
+    assert "must be a UUID" in result[0].text
+
+
+async def test_delete_alert_invalid_project_uuid(fresh_mcp, call_tool, set_auth_token, user_a_id):
+    with set_auth_token(_make_token(user_a_id)):
+        result = await call_tool(
+            fresh_mcp, "delete_alert", project_id="nope", alert_id=str(uuid.uuid4())
+        )
+    assert _is_error(result)
+    assert "must be a UUID" in result[0].text
+
+
+async def test_create_alert_every_rejects_threshold(
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    patch_open_session,
+    owned,
+    monkeypatch,
+    project_a_id,
+    user_a_id,
+):
+    svc = AsyncMock()
+    monkeypatch.setattr("app.services.alerts.create_alert", svc)
+    with set_auth_token(_make_token(user_a_id)):
+        result = await call_tool(
+            fresh_mcp,
+            "create_alert",
+            project_id=str(project_a_id),
+            event_name="signup",
+            condition="every",
+            threshold_n=5,
+        )
+    assert _is_error(result)
+    assert "must be omitted" in result[0].text
+    svc.assert_not_awaited()
+
+
+async def test_delete_alert_service_false_skips_audit(
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    patch_open_session,
+    owned,
+    monkeypatch,
+    project_a_id,
+    user_a_id,
+    mock_session,
+):
+    aid = uuid.uuid4()
+    monkeypatch.setattr(
+        "app.services.alerts.get_alert",
+        AsyncMock(return_value=_alert_obj(aid, project_a_id, event_name="signup")),
+    )
+    monkeypatch.setattr("app.services.alerts.delete_alert", AsyncMock(return_value=False))
+    audit = AsyncMock()
+    monkeypatch.setattr("app.services.audit.write_audit", audit)
+
+    with set_auth_token(_make_token(user_a_id)):
+        result = await call_tool(
+            fresh_mcp, "delete_alert", project_id=str(project_a_id), alert_id=str(aid)
+        )
+
+    assert _is_error(result)
+    audit.assert_not_awaited()
+    mock_session.commit.assert_not_awaited()

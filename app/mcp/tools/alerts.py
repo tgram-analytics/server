@@ -39,6 +39,7 @@ from app.mcp.tools._schemas import (
     ListAlertsResult,
 )
 from app.mcp.tools._session import open_session
+from app.models.alert import AlertCondition
 
 logger = logging.getLogger("app.mcp.tools")
 
@@ -200,7 +201,8 @@ def register_alert_tools(mcp: FastMCP) -> None:
         every N-th event; needs ``threshold_n``), ``threshold`` (ping once
         per day when the daily count reaches N; needs ``threshold_n``).
         Prefer ``every_n`` or ``threshold`` for high-volume events such as
-        ``pageview``.
+        ``pageview``. Any ``event_name`` is accepted; call ``list_event_names``
+        first to match an existing event.
         """
         token = get_access_token()
         if token is None or not isinstance(token, MCPAccessToken):
@@ -214,17 +216,22 @@ def register_alert_tools(mcp: FastMCP) -> None:
         from app.services.alerts import create_alert as svc_create_alert
 
         try:
-            body = AlertCreate(
-                project_id=pid,
-                event_name=event_name,
-                condition=condition,  # type: ignore[arg-type]
-                threshold_n=threshold_n,
+            body = AlertCreate.model_validate(
+                {
+                    "project_id": pid,
+                    "event_name": event_name,
+                    "condition": condition,
+                    "threshold_n": threshold_n,
+                }
             )
         except ValidationError as exc:
             msgs = "; ".join(
                 f"{'.'.join(str(p) for p in e['loc']) or 'input'}: {e['msg']}" for e in exc.errors()
             )
             return _error(f"invalid alert: {msgs}")
+
+        if body.condition is AlertCondition.every and body.threshold_n is not None:
+            return _error("invalid alert: threshold_n must be omitted when condition is 'every'")
 
         async with open_session() as session:
             try:
@@ -273,6 +280,7 @@ def register_alert_tools(mcp: FastMCP) -> None:
                 return _error(f"alert {alert_id} not found on project {project_id}")
             await session.commit()
 
+        logger.info("set alert %s is_active=%s on project_id=%s via mcp", aid, is_active, pid)
         return _alert_to_info(alert)
 
     @mcp.tool(title="Delete alert", annotations=_DELETE)
@@ -280,7 +288,7 @@ def register_alert_tools(mcp: FastMCP) -> None:
         project_id: str,
         alert_id: str,
     ) -> list[TextContent] | DeleteAlertResult:
-        """Delete an alert. History rows in ``alert_history`` are kept."""
+        """Delete an alert. Rows returned by ``alert_history`` are kept."""
         token = get_access_token()
         if token is None or not isinstance(token, MCPAccessToken):
             return _not_authenticated()
@@ -311,6 +319,9 @@ def register_alert_tools(mcp: FastMCP) -> None:
                 "via": "mcp",
             }
             deleted = await svc_delete_alert(session, aid, pid)
+            if not deleted:
+                # Raced with a bot-side delete between get_alert and here.
+                return _error(f"alert {alert_id} not found on project {project_id}")
             await write_audit(
                 session,
                 user_id=owner_user_id,
