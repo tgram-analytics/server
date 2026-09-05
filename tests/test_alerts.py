@@ -1905,3 +1905,71 @@ async def test_set_alert_active_sets_and_does_not_flip(singleton_user, db_sessio
 
     # Wrong project → None (no cross-project mutation).
     assert await set_alert_active(db_session, alert.id, uuid.uuid4(), is_active=False) is None
+
+
+async def test_notification_success_records_delivery(db_session, session_factory, singleton_user):
+    from sqlalchemy import select
+
+    from app.api.ingestion import _run_alert_evaluation
+    from app.models.alert_delivery import AlertDelivery
+
+    async with session_factory() as session:
+        project, alert = await _seed_project_and_alert(
+            session, singleton_user.id, name="deliv-ok.com", event_name="ok_event"
+        )
+        await session.commit()
+        pid, aid = project.id, alert.id
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+    with (
+        patch("app.api.ingestion.get_session_factory", return_value=session_factory),
+        patch("app.bot.setup.get_bot", return_value=mock_bot),
+    ):
+        await _run_alert_evaluation(pid, "ok_event")
+
+    async with session_factory() as session:
+        rows = (
+            (await session.execute(select(AlertDelivery).where(AlertDelivery.project_id == pid)))
+            .scalars()
+            .all()
+        )
+    assert len(rows) == 1
+    assert rows[0].alert_id == aid
+    assert rows[0].delivered is True
+    assert rows[0].error is None
+    assert rows[0].event_name == "ok_event"
+
+
+async def test_notification_failure_records_undelivered(
+    db_session, session_factory, singleton_user
+):
+    from sqlalchemy import select
+
+    from app.api.ingestion import _run_alert_evaluation
+    from app.models.alert_delivery import AlertDelivery
+
+    async with session_factory() as session:
+        project, _ = await _seed_project_and_alert(
+            session, singleton_user.id, name="deliv-fail.com", event_name="fail_event"
+        )
+        await session.commit()
+        pid = project.id
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock(side_effect=RuntimeError("telegram down"))
+    with (
+        patch("app.api.ingestion.get_session_factory", return_value=session_factory),
+        patch("app.bot.setup.get_bot", return_value=mock_bot),
+    ):
+        await _run_alert_evaluation(pid, "fail_event")
+
+    async with session_factory() as session:
+        rows = (
+            (await session.execute(select(AlertDelivery).where(AlertDelivery.project_id == pid)))
+            .scalars()
+            .all()
+        )
+    assert len(rows) == 1
+    assert rows[0].delivered is False
+    assert rows[0].error == "RuntimeError"

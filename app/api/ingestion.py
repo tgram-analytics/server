@@ -126,6 +126,7 @@ async def _run_alert_evaluation(
     from app.bot.setup import get_bot
     from app.models.alert import AlertCondition
     from app.models.project import Project
+    from app.services.alerts import record_delivery
 
     log = logging.getLogger(__name__)
     try:
@@ -215,6 +216,8 @@ async def _run_alert_evaluation(
                 )
                 keyboard = InlineKeyboardMarkup(rows)
 
+                delivered = True
+                send_error: str | None = None
                 try:
                     await bot.send_message(
                         chat_id=project.admin_chat_id,
@@ -222,12 +225,17 @@ async def _run_alert_evaluation(
                         parse_mode="HTML",
                         reply_markup=keyboard,
                     )
-                except Exception:
+                except Exception as exc:
+                    delivered = False
+                    send_error = type(exc).__name__
                     log.exception(
                         "failed to send alert notification: alert=%s project=%s",
                         alert.id,
                         project_id,
                     )
+                # History row lives in the same transaction as the counter
+                # update, so a fired alert is never recorded twice or lost.
+                await record_delivery(session, alert=alert, delivered=delivered, error=send_error)
     except Exception:
         log.exception("alert evaluation failed for project=%s event=%s", project_id, event_name)
 
