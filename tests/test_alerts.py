@@ -1804,3 +1804,98 @@ async def test_alert_delivery_model_roundtrip(singleton_user, db_session):
     assert row.error is None
     assert row.condition == AlertCondition.every_n
     assert row.threshold_n == 10
+
+
+async def _seed_project_and_alert(session, owner_id, *, name, event_name="buy"):
+    from app.services.alerts import create_alert
+    from app.services.projects import create_project
+
+    project, _ = await create_project(
+        session, name=name, admin_chat_id=ADMIN_ID, owner_user_id=owner_id
+    )
+    alert = await create_alert(
+        session, project_id=project.id, event_name=event_name, condition=AlertCondition.every
+    )
+    return project, alert
+
+
+async def test_record_delivery_snapshots_alert(singleton_user, db_session):
+    from app.services.alerts import record_delivery
+
+    project, alert = await _seed_project_and_alert(
+        db_session, singleton_user.id, name="rec-deliv.com"
+    )
+    row = await record_delivery(db_session, alert=alert, delivered=False, error="TimedOut")
+
+    assert row.alert_id == alert.id
+    assert row.project_id == project.id
+    assert row.event_name == "buy"
+    assert row.condition == AlertCondition.every
+    assert row.threshold_n is None
+    assert row.delivered is False
+    assert row.error == "TimedOut"
+    assert row.fired_at is not None
+
+
+async def test_list_deliveries_filters_and_orders(singleton_user, db_session):
+    from datetime import UTC, datetime, timedelta
+
+    from app.services.alerts import create_alert, list_deliveries, record_delivery
+
+    project, alert_buy = await _seed_project_and_alert(
+        db_session, singleton_user.id, name="list-deliv.com"
+    )
+    alert_signup = await create_alert(
+        db_session, project_id=project.id, event_name="signup", condition=AlertCondition.every
+    )
+    other_project, other_alert = await _seed_project_and_alert(
+        db_session, singleton_user.id, name="other-deliv.com"
+    )
+
+    first = await record_delivery(db_session, alert=alert_buy, delivered=True)
+    second = await record_delivery(db_session, alert=alert_signup, delivered=True)
+    third = await record_delivery(db_session, alert=alert_buy, delivered=True)
+    await record_delivery(db_session, alert=other_alert, delivered=True)
+    # Force distinct, ordered timestamps regardless of DB clock resolution.
+    base = datetime.now(UTC)
+    first.fired_at = base - timedelta(minutes=3)
+    second.fired_at = base - timedelta(minutes=2)
+    third.fired_at = base - timedelta(minutes=1)
+    await db_session.flush()
+
+    since = base - timedelta(days=7)
+    rows = await list_deliveries(db_session, project.id, since=since, limit=50)
+    assert [r.id for r in rows] == [third.id, second.id, first.id]
+
+    rows = await list_deliveries(db_session, project.id, since=since, limit=50, event_name="buy")
+    assert [r.id for r in rows] == [third.id, first.id]
+
+    rows = await list_deliveries(db_session, project.id, since=since, limit=2)
+    assert [r.id for r in rows] == [third.id, second.id]
+
+    rows = await list_deliveries(
+        db_session, project.id, since=base - timedelta(seconds=90), limit=50
+    )
+    assert [r.id for r in rows] == [third.id]
+
+
+async def test_set_alert_active_sets_and_does_not_flip(singleton_user, db_session):
+    from app.services.alerts import set_alert_active
+
+    project, alert = await _seed_project_and_alert(
+        db_session, singleton_user.id, name="set-active.com"
+    )
+    assert alert.is_active is True
+
+    updated = await set_alert_active(db_session, alert.id, project.id, is_active=False)
+    assert updated is not None and updated.is_active is False
+
+    # Calling again with the same value keeps it (no toggle).
+    updated = await set_alert_active(db_session, alert.id, project.id, is_active=False)
+    assert updated is not None and updated.is_active is False
+
+    updated = await set_alert_active(db_session, alert.id, project.id, is_active=True)
+    assert updated is not None and updated.is_active is True
+
+    # Wrong project → None (no cross-project mutation).
+    assert await set_alert_active(db_session, alert.id, uuid.uuid4(), is_active=False) is None
