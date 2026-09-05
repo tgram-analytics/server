@@ -144,6 +144,7 @@ def patch_open_session(monkeypatch: pytest.MonkeyPatch, mock_session):
         yield mock_session
 
     # Patch the imported reference inside each tools submodule.
+    import app.mcp.tools.alerts as alerts_mod
     import app.mcp.tools.data as data_mod
     import app.mcp.tools.projects as projects_mod
     import app.mcp.tools.setup as setup_mod
@@ -151,6 +152,7 @@ def patch_open_session(monkeypatch: pytest.MonkeyPatch, mock_session):
     monkeypatch.setattr(projects_mod, "open_session", _fake)
     monkeypatch.setattr(data_mod, "open_session", _fake)
     monkeypatch.setattr(setup_mod, "open_session", _fake)
+    monkeypatch.setattr(alerts_mod, "open_session", _fake)
     return _fake
 
 
