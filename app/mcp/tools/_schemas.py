@@ -257,6 +257,57 @@ class ProjectRequestStatusResult(BaseModel):
     message: str = Field(..., description="Human-readable summary of the current state.")
 
 
+# ─── Alerts ──────────────────────────────────────────────────────────────────
+
+
+class AlertInfo(BaseModel):
+    """One configured alert."""
+
+    id: str
+    project_id: str
+    event_name: str
+    condition: str = Field(..., description="One of 'every', 'every_n', 'threshold'.")
+    threshold_n: int | None = None
+    counter: int
+    is_active: bool
+    muted_until: str | None = None
+    created_at: str | None = None
+
+
+class ListAlertsResult(BaseModel):
+    """Result of :func:`list_alerts`."""
+
+    alerts: list[AlertInfo]
+
+
+class AlertDeliveryRow(BaseModel):
+    """One alert notification attempt."""
+
+    id: str
+    alert_id: str | None = Field(None, description="NULL when the alert was deleted later.")
+    event_name: str
+    condition: str
+    threshold_n: int | None = None
+    fired_at: str
+    delivered: bool
+    error: str | None = Field(None, description="Exception class name if the send failed.")
+
+
+class AlertHistoryResult(BaseModel):
+    """Result of :func:`alert_history`."""
+
+    project_id: str
+    period: str
+    rows: list[AlertDeliveryRow]
+
+
+class DeleteAlertResult(BaseModel):
+    """Result of :func:`delete_alert`."""
+
+    deleted: bool
+    alert_id: str
+
+
 # Re-exports to keep import sites tidy.
 __all__ = [
     "WhoamiResult",
@@ -281,4 +332,9 @@ __all__ = [
     "RotateAPIKeyResult",
     "CreateProjectRequestResult",
     "ProjectRequestStatusResult",
+    "AlertInfo",
+    "ListAlertsResult",
+    "AlertDeliveryRow",
+    "AlertHistoryResult",
+    "DeleteAlertResult",
 ]
