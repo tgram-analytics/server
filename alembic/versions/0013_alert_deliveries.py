@@ -67,8 +67,10 @@ def upgrade() -> None:
         "alert_deliveries",
         ["project_id", sa.text("fired_at DESC")],
     )
+    op.create_index("ix_alert_deliveries_alert_id", "alert_deliveries", ["alert_id"])
 
 
 def downgrade() -> None:
+    op.drop_index("ix_alert_deliveries_alert_id", table_name="alert_deliveries")
     op.drop_index("ix_alert_deliveries_project_fired", table_name="alert_deliveries")
     op.drop_table("alert_deliveries")

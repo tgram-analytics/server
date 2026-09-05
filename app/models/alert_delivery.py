@@ -22,7 +22,7 @@ class AlertDelivery(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         sa.UUID(as_uuid=True),
         primary_key=True,
-        default=uuid.uuid4,
+        server_default=sa.text("gen_random_uuid()"),
     )
     alert_id: Mapped[uuid.UUID | None] = mapped_column(
         sa.UUID(as_uuid=True),
@@ -56,4 +56,5 @@ class AlertDelivery(Base):
             "project_id",
             sa.text("fired_at DESC"),
         ),
+        sa.Index("ix_alert_deliveries_alert_id", "alert_id"),
     )
