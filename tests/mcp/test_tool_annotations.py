@@ -5,7 +5,7 @@ Per MCP spec section "Tools", each tool may carry ``annotations`` —
 ``openWorldHint``. Clients use these to decide whether to require user
 confirmation (esp. before destructive tools) and whether to retry on
 failure. Locks the values down so a refactor can't quietly drop the
-``destructiveHint`` from ``rotate_api_key``.
+``destructiveHint`` from ``rotate_api_key`` or ``delete_alert``.
 
 Runs offline against ``build_fastmcp_server`` — no DB, no HTTP.
 """
@@ -77,9 +77,38 @@ EXPECTED: dict[str, dict[str, bool]] = {
         "idempotentHint": True,
         "openWorldHint": False,
     },
-    # rotate_api_key is the only destructive tool. Clients should prompt
-    # the user before invoking it.
+    # rotate_api_key is destructive. Clients should prompt the user
+    # before invoking it.
     "rotate_api_key": {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+    "list_alerts": {
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+    "alert_history": {
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+    "create_alert": {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    },
+    "set_alert_active": {
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
+    # delete_alert is destructive. Clients should prompt the user first.
+    "delete_alert": {
         "readOnlyHint": False,
         "destructiveHint": True,
         "idempotentHint": False,

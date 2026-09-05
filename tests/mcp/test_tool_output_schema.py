@@ -55,7 +55,7 @@ def listed_tools():
     return {t.name: t for t in tools}
 
 
-ALL_TOOLS = [
+V1_TOOLS = [
     "whoami",
     "list_projects",
     "get_project",
@@ -68,6 +68,15 @@ ALL_TOOLS = [
     "get_integration_guide",
     "get_sdk_snippet",
     "rotate_api_key",
+]
+
+ALL_TOOLS = [
+    *V1_TOOLS,
+    "list_alerts",
+    "alert_history",
+    "create_alert",
+    "set_alert_active",
+    "delete_alert",
 ]
 
 
@@ -170,5 +179,7 @@ def test_every_v1_tool_has_a_schema_module() -> None:
     }
     # The 12 v1 tools map 1:1 to the 12 success-result models declared in
     # _schemas.py (verify by count, not by name — the mapping is enforced
-    # in the tool source files themselves).
-    assert len(expected_models) == len(ALL_TOOLS)
+    # in the tool source files themselves). Later tools (alerts) are not
+    # 1:1 — create_alert and set_alert_active share ``AlertInfo`` — so
+    # this check stays scoped to the v1 set.
+    assert len(expected_models) == len(V1_TOOLS)
