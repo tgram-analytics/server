@@ -130,8 +130,9 @@ async def mock_session() -> AsyncIterator[Any]:
     """A no-op session — tools call services that are themselves mocked.
 
     Yielded so that ``open_session()``'s context-manager shape works.
+    ``commit`` is an ``AsyncMock`` so write tools can assert they committed.
     """
-    yield object()
+    yield MagicMock(commit=AsyncMock(), rollback=AsyncMock())
 
 
 @pytest.fixture

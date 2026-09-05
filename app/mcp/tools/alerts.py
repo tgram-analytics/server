@@ -23,6 +23,7 @@ from typing import Any
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.fastmcp import FastMCP
 from mcp.types import TextContent, ToolAnnotations
+from pydantic import ValidationError
 
 from app.mcp.auth import (
     MCPAccessToken,
@@ -34,6 +35,7 @@ from app.mcp.tools._schemas import (
     AlertDeliveryRow,
     AlertHistoryResult,
     AlertInfo,
+    DeleteAlertResult,
     ListAlertsResult,
 )
 from app.mcp.tools._session import open_session
@@ -184,3 +186,140 @@ def register_alert_tools(mcp: FastMCP) -> None:
             period=period,
             rows=[_delivery_to_row(r) for r in rows],
         )
+
+    @mcp.tool(title="Create alert", annotations=_CREATE)
+    async def create_alert(
+        project_id: str,
+        event_name: str,
+        condition: str,
+        threshold_n: int | None = None,
+    ) -> list[TextContent] | AlertInfo:
+        """Create an alert on *project_id*. The user gets a Telegram message when it fires.
+
+        ``condition``: ``every`` (ping on each event), ``every_n`` (ping
+        every N-th event; needs ``threshold_n``), ``threshold`` (ping once
+        per day when the daily count reaches N; needs ``threshold_n``).
+        Prefer ``every_n`` or ``threshold`` for high-volume events such as
+        ``pageview``.
+        """
+        token = get_access_token()
+        if token is None or not isinstance(token, MCPAccessToken):
+            return _not_authenticated()
+        pid = _parse_uuid(project_id)
+        if pid is None:
+            return _error(f"invalid project_id {project_id!r}; must be a UUID")
+        owner_user_id = uuid.UUID(token.extra["user_id"])
+
+        from app.schemas.alert import AlertCreate
+        from app.services.alerts import create_alert as svc_create_alert
+
+        try:
+            body = AlertCreate(
+                project_id=pid,
+                event_name=event_name,
+                condition=condition,  # type: ignore[arg-type]
+                threshold_n=threshold_n,
+            )
+        except ValidationError as exc:
+            msgs = "; ".join(
+                f"{'.'.join(str(p) for p in e['loc']) or 'input'}: {e['msg']}" for e in exc.errors()
+            )
+            return _error(f"invalid alert: {msgs}")
+
+        async with open_session() as session:
+            try:
+                await assert_project_owned_by(session, pid, owner_user_id)
+            except ProjectNotOwnedError:
+                return _not_owned_error(project_id)
+            alert = await svc_create_alert(
+                session,
+                project_id=pid,
+                event_name=body.event_name,
+                condition=body.condition,
+                threshold_n=body.threshold_n,
+            )
+            await session.commit()
+
+        logger.info("created alert %s on project_id=%s via mcp", alert.id, pid)
+        return _alert_to_info(alert)
+
+    @mcp.tool(title="Pause or resume alert", annotations=_SET_ACTIVE)
+    async def set_alert_active(
+        project_id: str,
+        alert_id: str,
+        is_active: bool,
+    ) -> list[TextContent] | AlertInfo:
+        """Set an alert active (``true``) or paused (``false``). Idempotent."""
+        token = get_access_token()
+        if token is None or not isinstance(token, MCPAccessToken):
+            return _not_authenticated()
+        pid = _parse_uuid(project_id)
+        if pid is None:
+            return _error(f"invalid project_id {project_id!r}; must be a UUID")
+        aid = _parse_uuid(alert_id)
+        if aid is None:
+            return _error(f"invalid alert_id {alert_id!r}; must be a UUID")
+        owner_user_id = uuid.UUID(token.extra["user_id"])
+
+        from app.services.alerts import set_alert_active as svc_set_alert_active
+
+        async with open_session() as session:
+            try:
+                await assert_project_owned_by(session, pid, owner_user_id)
+            except ProjectNotOwnedError:
+                return _not_owned_error(project_id)
+            alert = await svc_set_alert_active(session, aid, pid, is_active=is_active)
+            if alert is None:
+                return _error(f"alert {alert_id} not found on project {project_id}")
+            await session.commit()
+
+        return _alert_to_info(alert)
+
+    @mcp.tool(title="Delete alert", annotations=_DELETE)
+    async def delete_alert(
+        project_id: str,
+        alert_id: str,
+    ) -> list[TextContent] | DeleteAlertResult:
+        """Delete an alert. History rows in ``alert_history`` are kept."""
+        token = get_access_token()
+        if token is None or not isinstance(token, MCPAccessToken):
+            return _not_authenticated()
+        pid = _parse_uuid(project_id)
+        if pid is None:
+            return _error(f"invalid project_id {project_id!r}; must be a UUID")
+        aid = _parse_uuid(alert_id)
+        if aid is None:
+            return _error(f"invalid alert_id {alert_id!r}; must be a UUID")
+        owner_user_id = uuid.UUID(token.extra["user_id"])
+
+        from app.services.alerts import delete_alert as svc_delete_alert
+        from app.services.alerts import get_alert
+        from app.services.audit import write_audit
+
+        async with open_session() as session:
+            try:
+                await assert_project_owned_by(session, pid, owner_user_id)
+            except ProjectNotOwnedError:
+                return _not_owned_error(project_id)
+            alert = await get_alert(session, aid, pid)
+            if alert is None:
+                return _error(f"alert {alert_id} not found on project {project_id}")
+            snapshot = {
+                "project_id": str(pid),
+                "event_name": alert.event_name,
+                "condition": str(getattr(alert.condition, "value", alert.condition)),
+                "via": "mcp",
+            }
+            deleted = await svc_delete_alert(session, aid, pid)
+            await write_audit(
+                session,
+                user_id=owner_user_id,
+                action="alert.delete",
+                target_type="alert",
+                target_id=str(aid),
+                metadata=snapshot,
+            )
+            await session.commit()
+
+        logger.info("deleted alert %s on project_id=%s via mcp", aid, pid)
+        return DeleteAlertResult(deleted=bool(deleted), alert_id=str(aid))
