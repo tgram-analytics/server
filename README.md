@@ -255,6 +255,21 @@ help you integrate the SDKs.
 Claude Desktop is supported via Settings → Connectors → Add custom
 connector (paste an `/mcp_token` token in the browser page that opens).
 
+Available tools: `whoami`, `list_projects`, `get_project`,
+`list_event_names`, `query_events`, `compare_periods`, `top_pages`,
+`recent_events`, `top_property_values`, `list_property_keys`,
+`verify_integration`, `get_integration_guide`, `get_sdk_snippet`,
+`rotate_api_key`, `create_project`, `get_project_request_status`, and the
+alert tools:
+
+- `list_alerts(project_id)` — alerts configured on a project.
+- `alert_history(project_id, period="7d", limit=50, event_name=None)` —
+  notifications sent, newest first, with delivered/error status.
+- `create_alert(project_id, event_name, condition, threshold_n=None)` —
+  create an alert (`every`, `every_n`, `threshold`).
+- `set_alert_active(project_id, alert_id, is_active)` — pause or resume an alert.
+- `delete_alert(project_id, alert_id)` — delete an alert (audited; history kept).
+
 Revoke tokens anytime with `/mcp_token`. Set `MCP_ENABLED=false` to
 remove the endpoint entirely. `MCP_PUBLIC_URL` overrides the base URL
 used in metadata and CORS/Host allow-lists (defaults to

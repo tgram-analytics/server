@@ -196,7 +196,9 @@ def build_fastmcp_server(
         name="tgram-analytics-mcp",
         instructions=(
             "tgram-analytics MCP server. Authenticated tools let you query "
-            "your projects, events, and integration status."
+            "your projects, events, and integration status, and manage "
+            "Telegram alerts (list, create, pause, delete) and read the "
+            "history of alerts sent."
         ),
         token_verifier=token_verifier,
         auth=auth_settings,
