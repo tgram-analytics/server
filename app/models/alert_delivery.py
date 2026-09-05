@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -36,7 +37,7 @@ class AlertDelivery(Base):
     event_name: Mapped[str] = mapped_column(sa.Text, nullable=False)
     # Reuse the PG enum created in migration 0001; do not create it again.
     condition: Mapped[AlertCondition] = mapped_column(
-        sa.Enum(AlertCondition, name="alert_condition", create_type=False),
+        postgresql.ENUM(AlertCondition, name="alert_condition", create_type=False),
         nullable=False,
     )
     threshold_n: Mapped[int | None] = mapped_column(sa.Integer, nullable=True)

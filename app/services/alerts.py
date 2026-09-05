@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.alert import Alert, AlertCondition
+from app.models.alert_delivery import AlertDelivery
 
 
 async def create_alert(
@@ -184,3 +185,67 @@ async def mute_alert(
     await session.flush()
     await session.refresh(alert)
     return alert
+
+
+async def set_alert_active(
+    session: AsyncSession,
+    alert_id: uuid.UUID,
+    project_id: uuid.UUID,
+    *,
+    is_active: bool,
+) -> Alert | None:
+    """Set ``is_active`` explicitly (not a flip). Returns None if not found."""
+    alert = await get_alert(session, alert_id, project_id)
+    if alert is None:
+        return None
+    alert.is_active = is_active
+    await session.flush()
+    await session.refresh(alert)
+    return alert
+
+
+async def record_delivery(
+    session: AsyncSession,
+    *,
+    alert: Alert,
+    delivered: bool,
+    error: str | None = None,
+) -> AlertDelivery:
+    """Insert one ``alert_deliveries`` row snapshotting *alert* at fire time."""
+    row = AlertDelivery(
+        alert_id=alert.id,
+        project_id=alert.project_id,
+        event_name=alert.event_name,
+        condition=alert.condition,
+        threshold_n=alert.threshold_n,
+        delivered=delivered,
+        error=error,
+    )
+    session.add(row)
+    await session.flush()
+    await session.refresh(row)
+    return row
+
+
+async def list_deliveries(
+    session: AsyncSession,
+    project_id: uuid.UUID,
+    *,
+    since: datetime,
+    limit: int,
+    event_name: str | None = None,
+) -> list[AlertDelivery]:
+    """Return deliveries for *project_id* with ``fired_at >= since``, newest first."""
+    query = (
+        select(AlertDelivery)
+        .where(
+            AlertDelivery.project_id == project_id,
+            AlertDelivery.fired_at >= since,
+        )
+        .order_by(AlertDelivery.fired_at.desc())
+        .limit(limit)
+    )
+    if event_name is not None:
+        query = query.where(AlertDelivery.event_name == event_name)
+    result = await session.execute(query)
+    return list(result.scalars().all())
