@@ -7,8 +7,8 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as health_router
-from app.api.marketing_redirect import router as marketing_redirect_router
 from app.api.ingestion import router as ingestion_router
+from app.api.marketing_redirect import router as marketing_redirect_router
 from app.api.projects import router as projects_router
 from app.api.webhook import router as webhook_router
 from app.bot.setup import init_bot, shutdown_bot
