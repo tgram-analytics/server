@@ -1,7 +1,9 @@
 # tgram-analytics · server
 
-> Self-hosted, privacy-first analytics controlled entirely through a Telegram bot.
-> No dashboard. No third parties. Just Telegram.
+> **Product analytics that messages you on Telegram.**
+> Like Google Analytics for your site or app — without opening a dashboard.
+> Track signups, sales, and page views; get alerts, charts, and weekly reports
+> right in the chat you already check. Self-hosted and privacy-first.
 > Or skip the setup — try the hosted version at [@MyTelegramAnalyticsBot](https://t.me/MyTelegramAnalyticsBot).
 
 [![CI](https://github.com/tgram-analytics/server/actions/workflows/ci.yml/badge.svg)](https://github.com/tgram-analytics/server/actions/workflows/ci.yml)
