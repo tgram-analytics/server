@@ -7,6 +7,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as health_router
+from app.api.marketing_redirect import router as marketing_redirect_router
 from app.api.ingestion import router as ingestion_router
 from app.api.projects import router as projects_router
 from app.api.webhook import router as webhook_router
@@ -182,6 +183,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(MCPPathRewriteMiddleware)
 
+    app.include_router(marketing_redirect_router)
     app.include_router(health_router)
     app.include_router(projects_router)
     app.include_router(ingestion_router)
