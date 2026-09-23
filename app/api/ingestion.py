@@ -25,6 +25,7 @@ from app.core.config import Settings, get_settings
 from app.core.database import get_session, get_session_factory
 from app.core.privacy import hash_visitor, parse_user_agent, scrub_properties
 from app.core.security import validate_api_key
+from app.core.telegram_ids import is_unreachable_chat_id
 from app.schemas.event import PageviewRequest, TrackEventRequest
 from app.services.events import evaluate_alerts, insert_event, is_origin_allowed
 
@@ -147,6 +148,14 @@ async def _run_alert_evaluation(
             project = result.scalar_one_or_none()
             if project is None:
                 log.warning("project not found for alert notification: %s", project_id)
+                return
+
+            if is_unreachable_chat_id(project.admin_chat_id):
+                # No Telegram chat can have this id (e.g. a demo account):
+                # skip the send, keep the history row, and log quietly.
+                log.debug("alert notification skipped, no chat: project=%s", project_id)
+                for alert in fired:
+                    await record_delivery(session, alert=alert, delivered=False, error="no_chat")
                 return
 
             from telegram import InlineKeyboardButton, InlineKeyboardMarkup

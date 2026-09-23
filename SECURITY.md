@@ -3,7 +3,7 @@
 ## Supported versions
 
 Security fixes land on the latest `main` branch and on the hosted service
-(including the MCP server at `https://tg-analytics.leorigna.com/mcp`).
+at https://mcp.tgram-analytics.com.
 Older commits and self-hosted installs that are not updated to the latest
 `main` do not receive backported fixes.
 

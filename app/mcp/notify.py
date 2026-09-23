@@ -13,6 +13,8 @@ from html import escape
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from app.core.telegram_ids import is_unreachable_chat_id
+
 logger = logging.getLogger("app.mcp")
 
 
@@ -35,6 +37,10 @@ def approval_keyboard(request_id: str) -> InlineKeyboardMarkup:
 async def notify_project_request(
     *, chat_id: int, request_id: str, name: str, domain_allowlist: list[str]
 ) -> None:
+    if is_unreachable_chat_id(chat_id):
+        # No Telegram chat can have this id (e.g. a demo account).
+        logger.debug("project-create request notification skipped, no chat")
+        return
     try:
         from app.bot.setup import get_bot
 
