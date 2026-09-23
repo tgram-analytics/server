@@ -3,8 +3,8 @@
 
 Run it once inside the server container, from the repo root::
 
-    python scripts/create_reviewer_demo.py              # create / refresh
-    python scripts/create_reviewer_demo.py --new-token  # also mint another token
+    python scripts/create_demo_account.py              # create / refresh
+    python scripts/create_demo_account.py --new-token  # also mint another token
 
 What it does, using the app's own settings, DB session, models and services:
 
@@ -27,13 +27,16 @@ are not recreated, and no new token is minted unless ``--new-token`` is
 passed. Rerunning shortly before someone uses the account keeps the data
 current (``verify_integration`` looks at the last 30 minutes by default).
 
-Alert delivery: the demo project's ``admin_chat_id`` is the fake id, so a
-Telegram send for it fails. Every proactive send in the server is wrapped
-per call (``app/api/ingestion.py`` records a ``delivered=false`` history
-row and continues; ``app/mcp/notify.py`` and ``app/mcp/oauth/notify.py``
-swallow and log), and alerts only fire from HTTP ingestion with the
-project's API key, which this script never prints. The "error" alert is
-stored paused as a second safeguard and to show both alert states.
+Telegram messages: the demo project's ``admin_chat_id`` is the fake id.
+The demo token can rotate the project API key (``rotate_api_key``) and
+create alerts, so alerts can fire from ingestion. Notification code skips
+the Telegram call for ids at or above 2**52
+(``app.core.telegram_ids.is_unreachable_chat_id``): an alert then records
+a ``delivered=false`` history row with error ``no_chat``, and a
+project-create request sends no message. The "error" alert is stored
+paused to show both alert states. An OAuth token exchange with the demo
+token sends the usual "New MCP client authorized" message to the admin
+chat (``ADMIN_CHAT_ID``), as for any other token.
 
 Plugins are NOT loaded, so pre-create hooks from extensions do not run
 for the demo project.
@@ -56,7 +59,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-# Allow ``python scripts/create_reviewer_demo.py`` from the repo root.
+# Allow ``python scripts/create_demo_account.py`` from the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import func, select, update  # noqa: E402
@@ -178,10 +181,12 @@ def _sessions_for_hour(rng: random.Random, hour_start: datetime, now: datetime, 
 def _plan_hour(
     hour_start: datetime, now: datetime, visitors: list[_Visitor], days: int
 ) -> list[tuple[datetime, str, dict[str, Any], _Visitor, str]]:
-    """Deterministically generate the events of one hour.
+    """Generate sample events for one hour.
 
-    Seeded by the hour itself, so the same hour always yields the same
-    events; callers filter by timestamp to avoid duplicates on rerun.
+    The RNG is seeded by the hour, but the traffic volume also depends on
+    *now* (growth curve), so two runs can plan different events for the
+    same hour. Reruns avoid duplicates because the caller keeps only
+    events newer than the newest existing demo event.
     """
     rng = random.Random(int(hour_start.timestamp()))
     planned: list[tuple[datetime, str, dict[str, Any], _Visitor, str]] = []
@@ -294,8 +299,8 @@ async def _get_or_create_project(session: AsyncSession, user: User) -> tuple[Pro
     project = result.scalar_one_or_none()
     if project is not None:
         return project, False
-    # The plaintext API key is discarded on purpose: nothing should ingest
-    # into the demo project except this script.
+    # The plaintext API key is not needed: the script inserts events
+    # directly, so it is discarded.
     project, _api_key = await create_project(
         session,
         name=DEMO_PROJECT_NAME,
@@ -317,7 +322,12 @@ async def _seed_events(
     """
     newest = (
         await session.execute(
-            select(func.max(Event.timestamp)).where(Event.project_id == project.id)
+            select(func.max(Event.timestamp)).where(
+                Event.project_id == project.id,
+                # Ignore future-dated rows (client timestamps are free-form),
+                # otherwise one far-future event would stop every top-up.
+                Event.timestamp <= now,
+            )
         )
     ).scalar_one_or_none()
 

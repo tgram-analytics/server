@@ -1,4 +1,4 @@
-"""Tests for ``scripts/create_reviewer_demo.py``.
+"""Tests for ``scripts/create_demo_account.py``.
 
 Runs the script's core function against the test DB (rolled back per test)
 and checks idempotency, ownership, and that the data backs every
@@ -20,12 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # 8 days covers the 7d window plus the previous 7d that compare_periods reads,
 # and keeps the suite fast. The script itself defaults to 30 days.
 _DAYS = 8
-_SCRIPT = Path(__file__).parent.parent / "scripts" / "create_reviewer_demo.py"
+_SCRIPT = Path(__file__).parent.parent / "scripts" / "create_demo_account.py"
 
 
 @pytest.fixture(scope="module")
 def demo() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("create_reviewer_demo", _SCRIPT)
+    spec = importlib.util.spec_from_file_location("create_demo_account", _SCRIPT)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -188,3 +188,22 @@ async def test_demo_data_backs_every_read_only_tool(
     assert {a.event_name for a in alerts} == {"signup", "error"}
     assert {a.event_name: a.is_active for a in alerts} == {"signup": True, "error": False}
     assert await list_deliveries(db_session, pid, since=month_start, limit=50)
+
+
+async def test_future_dated_event_does_not_block_top_up(
+    demo: ModuleType, db_session: AsyncSession
+) -> None:
+    from app.services.events import insert_event
+
+    start = datetime.now(UTC) - timedelta(days=1)
+    first = await demo.ensure_demo_account(db_session, now=start, days=_DAYS)
+    await insert_event(
+        db_session,
+        project_id=first.project_id,
+        event_name="pageview",
+        session_id="future",
+        properties={},
+        timestamp=start + timedelta(days=365),
+    )
+    later = await demo.ensure_demo_account(db_session, now=start + timedelta(hours=6), days=_DAYS)
+    assert later.events_added > 0
