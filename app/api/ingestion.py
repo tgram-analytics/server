@@ -342,8 +342,13 @@ async def track(
     )
 
     ua = request.headers.get("user-agent", "")
-    visitor_hash = await hash_visitor(project.id, client_ip, ua)
     browser, os_name, device_type = parse_user_agent(ua)
+    if device_type == "bot":
+        # Crawlers that run JavaScript (Googlebot renders every page it
+        # indexes) would otherwise be counted as visitors. Answer as if
+        # accepted so the client does not retry, and store nothing.
+        return {"status": "accepted"}
+    visitor_hash = await hash_visitor(project.id, client_ip, ua)
 
     scrubbed, _dropped, _oversized = scrub_properties(body.properties, project_id=project.id)
 
@@ -391,8 +396,11 @@ async def pageview(
     )
 
     ua = request.headers.get("user-agent", "")
-    visitor_hash = await hash_visitor(project.id, client_ip, ua)
     browser, os_name, device_type = parse_user_agent(ua)
+    if device_type == "bot":
+        # Same as /track: crawlers are not visitors.
+        return {"status": "accepted"}
+    visitor_hash = await hash_visitor(project.id, client_ip, ua)
 
     properties = {**body.properties, "url": body.url}
     if body.referrer:

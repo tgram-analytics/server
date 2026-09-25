@@ -348,8 +348,13 @@ expectations out of the box, and so the managed version we operate at
   daily salt rotates every UTC midnight, so the same visitor cannot be
   re-identified across days. Raw IP and raw User-Agent are never persisted.
 - **User-Agent parsing.** UA strings are parsed by `ua-parser` into
-  `browser`, `os`, and `device_type` (mobile/tablet/desktop/bot/unknown).
+  `browser`, `os`, and `device_type` (mobile/tablet/desktop/unknown;
+  rows stored before crawler filtering may also contain `bot`).
   The raw string is dropped before insertion.
+- **Crawlers are not stored.** When the User-Agent parses as a crawler
+  (Googlebot, Bingbot and the other `Spider` families `ua-parser` knows),
+  the endpoint answers `202` and stores nothing. Search engines render
+  JavaScript, so without this a small site's pageviews are mostly Googlebot.
 - **PII tripwire on `properties`.** A small key denylist (email, phone,
   ssn, password, token, credit_card, card_number, cvv, iban, tax_id)
   silently drops matching keys at ingestion time and increments an
