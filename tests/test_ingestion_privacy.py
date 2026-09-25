@@ -284,3 +284,60 @@ async def test_alert_notification_renders_no_pii(api_client, session_factory):
     assert "pro" in text
     assert "leak@x.com" not in text
     assert "email" not in text.lower()
+
+
+# Googlebot's rendering service runs the page's JavaScript with this UA, so a
+# client-side SDK sends a pageview for every page it indexes.
+_GOOGLEBOT_SMARTPHONE_UA = (
+    "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.7390.122 Mobile "
+    "Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+)
+
+
+async def _count_events(db_session, project_id: uuid.UUID) -> int:
+    await db_session.invalidate()
+    rows = await db_session.execute(select(Event).where(Event.project_id == project_id))
+    return len(rows.scalars().all())
+
+
+async def test_track_from_crawler_is_accepted_but_not_stored(api_client, db_session):
+    data = await _create_project(api_client, name="bot-track.com")
+
+    resp = await api_client.post(
+        "/api/v1/track",
+        json={
+            "api_key": data["api_key"],
+            "event_name": "purchase",
+            "session_id": str(uuid.uuid4()),
+        },
+        headers={"User-Agent": _GOOGLEBOT_SMARTPHONE_UA},
+    )
+    assert resp.status_code == 202, resp.text
+    assert await _count_events(db_session, uuid.UUID(data["id"])) == 0
+
+
+async def test_pageview_from_crawler_is_accepted_but_not_stored(api_client, db_session):
+    data = await _create_project(api_client, name="bot-pv.com")
+
+    resp = await api_client.post(
+        "/api/v1/pageview",
+        json={
+            "api_key": data["api_key"],
+            "url": "https://bot-pv.com/page/abc",
+            "session_id": str(uuid.uuid4()),
+        },
+        headers={"User-Agent": _GOOGLEBOT_SMARTPHONE_UA},
+    )
+    assert resp.status_code == 202, resp.text
+    assert await _count_events(db_session, uuid.UUID(data["id"])) == 0
+
+
+async def test_crawler_with_bad_key_is_still_rejected(api_client):
+    """The crawler check runs after authentication, never instead of it."""
+    resp = await api_client.post(
+        "/api/v1/pageview",
+        json={"api_key": "proj_invalid", "url": "https://x.com/", "session_id": "s"},
+        headers={"User-Agent": _GOOGLEBOT_SMARTPHONE_UA},
+    )
+    assert resp.status_code == 400
