@@ -156,3 +156,44 @@ def test_rotate_api_key_is_marked_destructive(listed_tools) -> None:
     assert tool.annotations.destructiveHint is True
     assert tool.annotations.readOnlyHint is False
     assert tool.annotations.idempotentHint is False
+
+
+def test_every_listed_tool_has_complete_annotations(listed_tools) -> None:
+    """Every tool from tools/list carries a title and both core hints.
+
+    Clients show ``annotations.title`` as the tool name, so it must be set
+    and match the top-level ``title``. Covers tools not in ``EXPECTED`` too.
+    """
+    assert listed_tools, "tools/list returned no tools"
+    for name, tool in listed_tools.items():
+        ann = tool.annotations
+        assert ann is not None, f"tool {name!r} has no annotations"
+        assert isinstance(ann.title, str) and ann.title, f"tool {name!r}: empty annotations.title"
+        assert ann.title == tool.title, (
+            f"tool {name!r}: annotations.title {ann.title!r} != title {tool.title!r}"
+        )
+        assert ann.readOnlyHint is not None, f"tool {name!r}: readOnlyHint unset"
+        assert ann.destructiveHint is not None, f"tool {name!r}: destructiveHint unset"
+
+
+def test_read_only_tools_are_not_destructive(listed_tools) -> None:
+    for name, tool in listed_tools.items():
+        if tool.annotations.readOnlyHint:
+            assert tool.annotations.destructiveHint is False, name
+
+
+def test_shared_annotation_constants_are_not_mutated(listed_tools) -> None:
+    """Titles are set on copies; the shared module constants stay untouched."""
+    from app.mcp.tools import alerts, data, projects, setup
+
+    for const in (
+        alerts._READ_ONLY,
+        data._READ_ONLY,
+        projects._READ_ONLY,
+        setup._READ_ONLY_LOCAL,
+        setup._READ_ONLY_OPEN_WORLD,
+    ):
+        assert const.title is None
+        assert const.destructiveHint is None
+    assert listed_tools["list_alerts"].annotations.title == "List alerts"
+    assert listed_tools["alert_history"].annotations.title == "Alert history"
