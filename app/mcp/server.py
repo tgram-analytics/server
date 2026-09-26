@@ -263,8 +263,32 @@ def build_fastmcp_server(
 
     # Phase 5b: register the eight real v1 tools + two Phase-6 stubs.
     register_all_tools(mcp)
+    _complete_tool_annotations(mcp)
 
     return mcp
+
+
+def _complete_tool_annotations(mcp: FastMCP) -> None:
+    """Fill in ``annotations.title`` and ``destructiveHint`` on every tool.
+
+    MCP clients read ``tool.annotations.title`` as the display name, but
+    ``@mcp.tool(title=...)`` only sets the top-level ``Tool.title``. This
+    copies that title into the annotations when it is missing. For
+    read-only tools it also sets ``destructiveHint=False`` when unset.
+    Values that are already set are never changed.
+
+    Annotations are replaced with a copy, never mutated in place: several
+    tools share one module-level ``ToolAnnotations`` constant.
+    """
+    for tool in mcp._tool_manager.list_tools():
+        annotations = tool.annotations or ToolAnnotations()
+        update: dict[str, Any] = {}
+        if not annotations.title and tool.title:
+            update["title"] = tool.title
+        if annotations.readOnlyHint is True and annotations.destructiveHint is None:
+            update["destructiveHint"] = False
+        if update or tool.annotations is None:
+            tool.annotations = annotations.model_copy(update=update)
 
 
 def build_mcp_asgi_app(settings: Any, *, token_verifier: Any) -> tuple[Any, Any]:

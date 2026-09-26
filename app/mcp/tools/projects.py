@@ -418,6 +418,7 @@ def register_project_tools(mcp: FastMCP) -> None:
         title="Get project request status",
         annotations=ToolAnnotations(
             readOnlyHint=False,
+            destructiveHint=False,
             idempotentHint=True,
             openWorldHint=False,
         ),
