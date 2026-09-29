@@ -15,8 +15,10 @@ import asyncio
 import io
 import ipaddress
 import logging
+import math
 import random
 import re
+import warnings
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -50,6 +52,37 @@ DEVICE_PRESETS: dict[str, DevicePreset] = {
 
 MAX_SCREENSHOT_HEIGHT = 6000  # CSS px
 MAX_POINTS = 5000
+
+# Largest screenshot accepted, in pixels. Matches the renderer's budget
+# (24 Mpx); anything larger is refused before it is decoded.
+MAX_SCREENSHOT_PIXELS = 24_000_000
+MAX_SCREENSHOT_BYTES = 40 * 1024 * 1024
+# Pillow warns above this and raises at twice it. Set explicitly so the
+# limit does not depend on the Pillow version.
+Image.MAX_IMAGE_PIXELS = MAX_SCREENSHOT_PIXELS
+
+
+class ScreenshotTooLarge(ValueError):
+    """The PNG is larger than :data:`MAX_SCREENSHOT_PIXELS`."""
+
+
+def png_size(png: bytes) -> tuple[int, int]:
+    """Read ``(width, height)`` from the PNG header without decoding pixels.
+
+    Raises :class:`ScreenshotTooLarge` above the pixel budget, and
+    ``PIL.UnidentifiedImageError`` / ``OSError`` for data that is not an image.
+    """
+    with warnings.catch_warnings():
+        # Our own check below replaces Pillow's DecompressionBombWarning.
+        warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+        try:
+            with Image.open(io.BytesIO(png)) as img:  # lazy: reads the header only
+                width, height = img.size
+        except Image.DecompressionBombError as exc:  # over 2x MAX_IMAGE_PIXELS
+            raise ScreenshotTooLarge(str(exc)) from exc
+    if width * height > MAX_SCREENSHOT_PIXELS:
+        raise ScreenshotTooLarge(f"screenshot is {width}x{height} px")
+    return width, height
 
 
 def screenshot_params(device: str, median_vw: int | None) -> tuple[int, int]:
@@ -163,6 +196,10 @@ async def fetch_screenshot(
         if not resp.content.startswith(b"\x89PNG"):
             logger.warning("renderer response is not a PNG")
             return None
+        if len(resp.content) > MAX_SCREENSHOT_BYTES:
+            logger.warning("renderer PNG too large: %d bytes", len(resp.content))
+            return None
+        png_size(resp.content)  # raises above the pixel budget -> None below
         return Screenshot(
             png=resp.content,
             final_url=resp.headers.get("X-Final-Url", url),
@@ -235,9 +272,12 @@ def draw_heat_layer(png: bytes, points: list[tuple[float, int]], dpr: int = 1) -
     ``points`` are ``(x, y)`` with ``x`` a 0..1 fraction of the document
     width and ``y`` CSS px from the top of the document. ``dpr`` is the
     screenshot's device pixel ratio. Points below the bottom of the image
-    (page shorter than when tapped, or height cap) are skipped. CPU-bound:
-    call it through ``asyncio.to_thread`` (see :func:`render_heatmap`).
+    (page shorter than when tapped, or height cap) and non-finite points
+    are skipped. Raises :class:`ScreenshotTooLarge` for a PNG above the pixel
+    budget (:func:`fetch_screenshot` never returns one). CPU-bound: call it
+    through ``asyncio.to_thread`` (see :func:`render_heatmap`).
     """
+    png_size(png)  # refuse oversized input before decoding it
     shot = Image.open(io.BytesIO(png)).convert("RGBA")
     width, height = shot.size
     radius = max(18, width // 26)
@@ -248,6 +288,8 @@ def draw_heat_layer(png: bytes, points: list[tuple[float, int]], dpr: int = 1) -
 
     heat = Image.new("L", (width, height), 0)
     for x_frac, y_css in points:
+        if not (math.isfinite(x_frac) and math.isfinite(y_css)):
+            continue
         px = int(min(max(float(x_frac), 0.0), 1.0) * (width - 1))
         py = int(y_css) * dpr
         if py < 0 or py >= height:

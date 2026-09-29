@@ -10,10 +10,13 @@ from PIL import Image
 from app.core.config import Settings
 from app.models.project import Project
 from app.services.heatmap import (
+    MAX_SCREENSHOT_PIXELS,
     Screenshot,
+    ScreenshotTooLarge,
     build_site_url,
     draw_heat_layer,
     fetch_screenshot,
+    png_size,
     render_heatmap,
     screenshot_params,
     slugify_path,
@@ -82,6 +85,52 @@ def test_draw_heat_layer_scales_y_by_dpr():
     out = out.convert("RGB")
     assert out.getpixel((99, 300)) != (255, 255, 255)
     assert out.getpixel((99, 150)) == (255, 255, 255)
+
+
+def test_draw_heat_layer_skips_non_finite_points():
+    nan, inf = float("nan"), float("inf")
+    points = [(nan, 10), (0.5, nan), (inf, 10), (0.5, -inf), (-inf, inf)]
+    out = Image.open(io.BytesIO(draw_heat_layer(_png(60, 60), points, dpr=1))).convert("RGB")
+    assert out.getextrema() == ((255, 255), (255, 255), (255, 255))
+    # A finite point next to the bad ones is still drawn.
+    out = draw_heat_layer(_png(60, 60), [*points, (0.5, 30)], dpr=1)
+    assert Image.open(io.BytesIO(out)).convert("RGB").getpixel((29, 30)) != (255, 255, 255)
+
+
+def _big_png() -> bytes:
+    # 1-bit image just over the budget: tiny in memory and on the wire.
+    buf = io.BytesIO()
+    Image.new("1", (6000, MAX_SCREENSHOT_PIXELS // 6000 + 1)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_image_max_pixels_is_set_explicitly():
+    assert Image.MAX_IMAGE_PIXELS == MAX_SCREENSHOT_PIXELS
+
+
+def test_png_size_rejects_above_budget_without_decoding(monkeypatch):
+    big, small = _big_png(), _png(20, 10)
+
+    def no_decode(self, *args, **kwargs):
+        raise AssertionError("pixels must not be decoded")
+
+    monkeypatch.setattr(Image.Image, "load", no_decode)
+    with pytest.raises(ScreenshotTooLarge):
+        png_size(big)
+    assert png_size(small) == (20, 10)
+
+
+def test_draw_heat_layer_rejects_oversized_png():
+    with pytest.raises(ScreenshotTooLarge):
+        draw_heat_layer(_big_png(), [(0.5, 10)], dpr=1)
+
+
+async def test_fetch_screenshot_returns_none_above_pixel_budget():
+    with respx.mock() as router:
+        router.get(f"{RENDERER}/shot").mock(
+            return_value=httpx.Response(200, content=_big_png(), headers={"X-Doc-Height": "9"})
+        )
+        assert await fetch_screenshot("https://a.example/", "mobile", settings=_settings()) is None
 
 
 def test_draw_heat_layer_without_points_is_unchanged():

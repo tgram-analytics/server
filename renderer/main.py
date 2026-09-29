@@ -12,10 +12,10 @@ Endpoints:
       X-Doc-Width (CSS px of the whole document, before the height cap).
 
 Limits: one screenshot at a time, Chromium launched per request and closed
-after it, navigation timeout, height cap. Every request the page makes is
-checked: hosts that resolve to non-public addresses are blocked, and a
-screenshot is refused when any request (including redirect hops) reached
-such a host.
+after it, navigation timeout, pixel budget. The page host is resolved once,
+checked, and pinned in Chromium with --host-resolver-rules. Sub-requests to
+hosts that resolve to non-public addresses are blocked. This is not a full
+SSRF boundary: see README.md, "Network guard".
 
 Environment:
   RENDERER_TOKEN  optional; when set, /shot requires "Authorization: Bearer <token>"
@@ -33,9 +33,18 @@ from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Header, HTTPException, Query, Response
-from guard import GuardError, host_is_public, is_login_wall, validate_target_url
+from guard import (
+    MAX_DOC_WIDTH,
+    CheckedTarget,
+    GuardError,
+    clip_height,
+    host_is_public,
+    is_login_wall,
+    launch_args,
+    validate_target_url,
+)
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Request, Route, async_playwright
+from playwright.async_api import Page, Request, Route, async_playwright
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 logger = logging.getLogger("renderer")
@@ -47,17 +56,14 @@ SETTLE_SECONDS = 1.0
 QUEUE_TIMEOUT_SECONDS = 30.0
 SHOT_TIMEOUT_SECONDS = 40.0
 VIEWPORT_HEIGHT = 844
-MAX_DOC_WIDTH = 4000
 
 # Ingestion paths of the analytics server. Blocked so that a screenshot of a
 # tracked site is not counted as a visit.
 _BLOCKED_PATH_SUFFIXES = ("/api/v1/track", "/api/v1/pageview", "/api/v1/taps")
 
-_LAUNCH_ARGS = ["--disable-dev-shm-usage", "--no-sandbox", "--disable-gpu"]
-
 _one_at_a_time = asyncio.Semaphore(1)
 
-app = FastAPI(title="tgram-analytics renderer", docs_url=None, redoc_url=None)
+app = FastAPI(title="tgram-analytics renderer", docs_url=None, redoc_url=None, openapi_url=None)
 
 
 @dataclass
@@ -104,13 +110,14 @@ def _check_token(authorization: str | None) -> None:
         raise HTTPException(status_code=401, detail="invalid or missing token")
 
 
-async def _render(url: str, width: int, dpr: int, max_height: int) -> _Shot:
+async def _render(target: CheckedTarget, width: int, dpr: int, max_height: int) -> _Shot:
+    url = target.url
     checks = _HostCheck()
 
     async def on_route(route: Route) -> None:
         req_url = route.request.url
         path = urlsplit(req_url).path
-        if path.endswith(_BLOCKED_PATH_SUFFIXES):
+        if path.rstrip("/").endswith(_BLOCKED_PATH_SUFFIXES):
             await route.abort("blockedbyclient")
             return
         if await checks.allowed(req_url):
@@ -120,11 +127,12 @@ async def _render(url: str, width: int, dpr: int, max_height: int) -> _Shot:
             await route.abort("blockedbyclient")
 
     def on_request(request: Request) -> None:
-        # Fires for redirect hops too, which page.route() does not see.
+        # Fires for redirect hops too, which route() does not see.
         checks.seen_urls.add(request.url)
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=_LAUNCH_ARGS)
+        # Launched per request with the page host pinned to the checked address.
+        browser = await p.chromium.launch(headless=True, args=launch_args(target))
         try:
             context = await browser.new_context(
                 viewport={"width": width, "height": VIEWPORT_HEIGHT},
@@ -134,10 +142,18 @@ async def _render(url: str, width: int, dpr: int, max_height: int) -> _Shot:
                 service_workers="block",
                 accept_downloads=False,
             )
+            # Context-wide, so any page the site opens goes through the guard.
+            context.on("request", on_request)
+            await context.route("**/*", on_route)
             page = await context.new_page()
-            page.on("request", on_request)
             page.on("websocket", lambda ws: checks.seen_urls.add(ws.url))
-            await page.route("**/*", on_route)
+
+            def on_new_page(extra: Page) -> None:
+                # Popups are also blocked by --block-new-web-contents.
+                if extra is not page:
+                    asyncio.ensure_future(extra.close())
+
+            context.on("page", on_new_page)
 
             try:
                 await page.goto(url, wait_until="load", timeout=NAV_TIMEOUT_MS)
@@ -158,14 +174,17 @@ async def _render(url: str, width: int, dpr: int, max_height: int) -> _Shot:
             has_password = await page.locator("input[type=password]").count() > 0
             final_url = page.url
 
+            shot_height = clip_height(doc_width, doc_height, dpr, max_height)
             png = await page.screenshot(
                 full_page=True,
                 type="png",
-                clip={"x": 0, "y": 0, "width": doc_width, "height": min(doc_height, max_height)},
+                clip={"x": 0, "y": 0, "width": doc_width, "height": shot_height},
             )
 
             # Refuse the result when anything the page loaded (redirect hops
-            # included) came from a non-public address.
+            # included) is on a host that now resolves to a non-public address.
+            # This uses the renderer's own DNS lookup, not the address the
+            # browser connected to; the page host itself is pinned at launch.
             for seen in sorted(checks.seen_urls):
                 if not await checks.allowed(seen):
                     raise HTTPException(
@@ -198,7 +217,7 @@ async def shot(
 ) -> Response:
     _check_token(authorization)
     try:
-        await asyncio.to_thread(validate_target_url, url)
+        target = await asyncio.to_thread(validate_target_url, url)
     except GuardError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
 
@@ -208,7 +227,7 @@ async def shot(
         raise HTTPException(status_code=503, detail="renderer busy") from exc
     try:
         result = await asyncio.wait_for(
-            _render(url, width, dpr, max_height), timeout=SHOT_TIMEOUT_SECONDS
+            _render(target, width, dpr, max_height), timeout=SHOT_TIMEOUT_SECONDS
         )
     except TimeoutError as exc:
         raise HTTPException(status_code=504, detail="screenshot timeout") from exc
