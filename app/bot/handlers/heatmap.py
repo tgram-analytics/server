@@ -54,8 +54,13 @@ DEVICE_CHOICES: tuple[str, ...] = (*taps_svc.DEVICES, taps_svc.ALL_DEVICES)
 DEVICE_ICON = {"mobile": "📱", "tablet": "📲", "desktop": "🖥", "all": "🌐"}
 
 MAX_PATH_CHARS = 80
+MAX_NAME_CHARS = 60
 MAX_BUTTON_PATH_CHARS = 48
 
+_ACTIONS = frozenset({"proj", "page", "dev", "prd", "back"})
+_BACK_TARGETS = frozenset({"proj", "page", "dev"})
+
+UNKNOWN_ACTION_NOTE = "This button is out of date. Send /heatmap to start again."
 EXPIRED_TEXT = "❌ Session expired. Send /heatmap to start again."
 RENDERER_HINT = "ℹ️ Screenshots need the renderer service (see README)."
 LOGIN_WALL_NOTE = "🔒 This page needs a login, so there is no screenshot."
@@ -82,7 +87,7 @@ def _header(
 ) -> str:
     parts = [
         "🔥 <b>Heatmap</b>",
-        html.escape(project.name),
+        html.escape(_short(project.name, MAX_NAME_CHARS)),
         f"<code>{html.escape(_short(path, MAX_PATH_CHARS))}</code>",
     ]
     if device is not None:
@@ -192,10 +197,12 @@ async def heatmap_callback(
     """Dispatch every ``hm:`` callback."""
     query = update.callback_query
     assert query is not None
-    await query.answer()
-
     _prefix, _, rest = (query.data or "").partition(":")
     action, _, arg = rest.partition(":")
+    if action not in _ACTIONS or (action == "back" and arg not in _BACK_TARGETS):
+        await query.answer(UNKNOWN_ACTION_NOTE)
+        return
+    await query.answer()
 
     if action == "proj":
         await _pick_page(query, session, user.id, arg)
@@ -280,7 +287,7 @@ async def _pick_page(
         await session.commit()
         await _edit(
             query,
-            f"🔥 <b>Heatmap</b> · {html.escape(project.name)}\n\n"
+            f"🔥 <b>Heatmap</b> · {html.escape(_short(project.name, MAX_NAME_CHARS))}\n\n"
             "📭 No pageviews in the last 30 days, so there is no page to pick.",
             InlineKeyboardMarkup([back_row]),
         )
@@ -304,7 +311,7 @@ async def _pick_page(
     buttons.append(back_row)
     await _edit(
         query,
-        f"🔥 <b>Heatmap</b> · {html.escape(project.name)}\n"
+        f"🔥 <b>Heatmap</b> · {html.escape(_short(project.name, MAX_NAME_CHARS))}\n"
         "Pick a page (most viewed in the last 30 days):",
         InlineKeyboardMarkup(buttons),
     )
@@ -475,7 +482,9 @@ async def _send_heatmap(
         await _edit(query, text(note), keyboard)
         return
 
-    await _edit(query, text(SHOT_PENDING_NOTE), keyboard)
+    # No buttons while the screenshot is taken: a second tap would start a
+    # second render. The final edit below puts them back.
+    await _edit(query, text(SHOT_PENDING_NOTE))
 
     shot = await fetch_screenshot(site_url, device, median_vw)
     final_note: str | None
