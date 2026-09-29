@@ -414,3 +414,111 @@ async def test_foreign_project_is_rejected(session_factory, singleton_user):
     async with session_factory() as session:
         await session.execute(text("DELETE FROM users WHERE id = :i"), {"i": str(victim_id)})
         await session.commit()
+
+
+def _shot(final_url: str = "https://hm.example.com/"):
+    from app.services.heatmap import Screenshot
+
+    return Screenshot(
+        png=_png(), final_url=final_url, login_wall=False, doc_height=10, width=390, dpr=2
+    )
+
+
+async def test_pending_screenshot_message_has_no_buttons(
+    session_factory, singleton_user, monkeypatch
+):
+    """While the screenshot is taken the period buttons are gone (no double render)."""
+    import app.bot.handlers.heatmap as hm
+
+    chat_id = 4108
+    pid = await _project(session_factory, singleton_user.id, "hm-pending.example.com")
+    await _add_taps(session_factory, pid, "/", "mobile", [(0.5, 10, "a")])
+    await _seed_state(
+        session_factory,
+        chat_id,
+        {"project_id": str(pid), "pages": ["/"], "page": 0, "device": "mobile"},
+    )
+    update, ctx, query = _callback("hm:prd:7d", chat_id)
+    seen: dict = {}
+
+    async def fake_fetch(url, device, median_vw=None, **_kw):
+        # The message as the user sees it while the render is pending.
+        seen["text"] = query.edit_message_text.call_args[0][0]
+        seen["markup"] = query.edit_message_text.call_args.kwargs.get("reply_markup")
+        return _shot("https://hm-pending.example.com/")
+
+    monkeypatch.setattr(hm, "get_settings", lambda: SimpleNamespace(screenshot_url="http://r"))
+    monkeypatch.setattr(hm, "fetch_screenshot", fake_fetch)
+    await hm.heatmap_callback(update, ctx)
+
+    assert hm.SHOT_PENDING_NOTE in seen["text"]
+    assert seen["markup"] is None
+    # The final edit restores the period toggles and Back.
+    assert "hm:prd:30d" in _buttons(query) and "hm:back:dev" in _buttons(query)
+    assert hm.SHOT_PENDING_NOTE not in _last_text(query)
+    query.message.reply_document.assert_called_once()
+
+    await _cleanup(session_factory, chat_id, pid)
+
+
+async def test_screenshot_failure_and_render_error_keep_text(
+    session_factory, singleton_user, renderer, monkeypatch
+):
+    """fetch None, render raising or send raising: the ranking still arrives."""
+    import app.bot.handlers.heatmap as hm
+
+    chat_id = 4109
+    pid = await _project(session_factory, singleton_user.id, "hm-fail.example.com")
+    await _add_taps(session_factory, pid, "/", "mobile", [(0.5, 10, "lbl")])
+    await _seed_state(
+        session_factory,
+        chat_id,
+        {"project_id": str(pid), "pages": ["/"], "page": 0, "device": "mobile"},
+    )
+
+    # The renderer answers nothing usable.
+    renderer.result["shot"] = None
+    update, ctx, query = _callback("hm:prd:7d", chat_id)
+    await hm.heatmap_callback(update, ctx)
+    assert hm.SHOT_FAILED_NOTE in _last_text(query) and "1 tap" in _last_text(query)
+    query.message.reply_document.assert_not_called()
+
+    # Drawing the heat layer raises.
+    renderer.result["shot"] = _shot()
+
+    async def boom(shot, points):
+        raise RuntimeError("draw failed")
+
+    monkeypatch.setattr(hm, "render_heatmap", boom)
+    update, ctx, query = _callback("hm:prd:7d", chat_id)
+    await hm.heatmap_callback(update, ctx)
+    assert hm.SHOT_FAILED_NOTE in _last_text(query) and "1 tap" in _last_text(query)
+    query.message.reply_document.assert_not_called()
+
+    # Sending the document raises.
+    monkeypatch.setattr(hm, "render_heatmap", AsyncMock(return_value=_png()))
+    update, ctx, query = _callback("hm:prd:7d", chat_id)
+    query.message.reply_document = AsyncMock(side_effect=RuntimeError("send failed"))
+    await hm.heatmap_callback(update, ctx)
+    assert hm.SHOT_FAILED_NOTE in _last_text(query) and "1 tap" in _last_text(query)
+
+    await _cleanup(session_factory, chat_id, pid)
+
+
+async def test_unknown_callback_answers_with_note(session_factory, singleton_user):
+    from app.bot.handlers.heatmap import UNKNOWN_ACTION_NOTE, heatmap_callback
+
+    for data in ("hm:back:zzz", "hm:zzz:1"):
+        update, ctx, query = _callback(data, 4110)
+        await heatmap_callback(update, ctx)
+        query.answer.assert_awaited_once_with(UNKNOWN_ACTION_NOTE)
+        query.edit_message_text.assert_not_called()
+
+
+def test_header_truncates_long_project_name():
+    from app.bot.handlers.heatmap import _ranking_text
+    from app.models.project import Project
+
+    out = _ranking_text(Project(name="n" * 3000), "/", "mobile", "7d", [], 0, None)
+    assert "n" * 59 + "…" in out
+    assert "n" * 61 not in out
