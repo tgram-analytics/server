@@ -42,7 +42,9 @@ timeout.
 - Viewport `width` x 844 CSS px, mobile emulation below 768 px. Waits for the
   `load` event (20 s timeout), then up to 8 s for network idle, then 1 s.
   Total budget per request: 40 s.
-- Full-page PNG, clipped to `max_height` CSS px.
+- Full-page PNG. The document width is capped at 2000 CSS px. The height is
+  clipped to `max_height` CSS px and to a budget of 24 million device pixels
+  (`width * dpr * height * dpr`).
 - Login wall: the page has an `input[type=password]`, or navigation ended on
   a different path that contains `login`, `signin`, `sign-in` or `auth`.
 - The page is loaded like a first-time visitor: no cookies, no stored state,
@@ -52,21 +54,32 @@ timeout.
 
 ## Network guard
 
-- The target URL must be `http` or `https`, with no credentials, and its host
-  must resolve only to public addresses. Loopback, private (RFC 1918, ULA),
-  link-local (including `169.254.169.254`), CGNAT, multicast and reserved
-  ranges are refused.
-- Every sub-request goes through the same check (`page.route`) and is aborted
-  when its host is not public.
-- Redirect hops are not seen by `page.route`, so every request the page made
-  (redirects and WebSockets included) is checked again after the screenshot.
-  If any of them reached a non-public address, the screenshot is discarded
-  and the answer is `403`.
-- Limit: the check resolves DNS separately from Chromium, so a host that
-  changes its DNS answer between the two lookups can get one request through.
-  The response never leaves the renderer (the screenshot is discarded when
-  the final check sees it), but the request is sent. Where that matters, run
-  the renderer on a network with no route to internal services.
+- The target URL must be `http` or `https`, with no credentials. Its host is
+  resolved once and every address must be public. Loopback, private
+  (RFC 1918, ULA), link-local (including `169.254.169.254`), CGNAT,
+  multicast, reserved, NAT64 (`64:ff9b::/96`) and IPv4-compatible IPv6
+  addresses are refused.
+- Chromium is launched with `--host-resolver-rules="MAP <host> <checked-ip>"`
+  for that host, so the top-level page loads from the address that was
+  checked. A DNS answer that changes after the check has no effect on it.
+- Sub-requests (all pages of the browser context) go through a route check
+  and are aborted when their host resolves to a non-public address.
+- Redirect hops are not seen by the route check, so every request URL (plus
+  WebSockets) is checked again after the screenshot. If one of their hosts
+  resolves to a non-public address, the screenshot is discarded (`403`).
+- Popups are blocked (`--block-new-web-contents`) and any extra page is
+  closed.
+
+**Limit.** Hosts other than the page host (images, scripts, redirect targets
+on another host) are resolved by Chromium on its own. The checks above use a
+separate DNS lookup, so a host that changes its DNS answer between the two
+lookups can make Chromium send a request to a private address. The post-shot
+check cannot detect that: it does not see the address Chromium connected to.
+
+**Multi-tenant deployments must run the renderer on a network with no route
+to private, CGNAT (`100.64.0.0/10`, which includes tailnet addresses),
+link-local or other internal ranges**, for example a dedicated Docker network
+with an egress firewall. The in-process checks alone are not enough there.
 
 ## Configuration
 
@@ -99,8 +112,8 @@ counts shared pages more than once. Proportional set size (PSS) peaked at
 Guidance:
 
 - Set a **1 GB memory limit** and `shm_size: 256m` (Chromium also runs with
-  `--disable-dev-shm-usage`). Tall pages cost more: the height cap
-  (`max_height`, 6000 CSS px by default) bounds the bitmap.
+  `--disable-dev-shm-usage`). The 24 Mpx budget bounds the bitmap for any
+  width, DPR and page height.
 - Run **one replica**. The service renders one page at a time by design.
 - Image size: 1.27 GB on disk (344 MB compressed). Most of it is the
   headless shell (262 MB) and the system libraries and fonts that
