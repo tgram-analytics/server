@@ -107,6 +107,16 @@ async def test_taps_scroll_only_batch_is_accepted(api_client, db_session):
     assert [r.kind for r in rows] == ["scroll"]
 
 
+async def test_taps_zero_viewport_width_is_accepted(api_client, db_session):
+    """Hidden tabs and iframes report innerWidth = 0; the batch is kept."""
+    data = await _create_project(api_client, "taps-vw-zero.com")
+    resp = await api_client.post("/api/v1/taps", json=_body(data["api_key"], vw=0))
+    assert resp.status_code == 202, resp.text
+    rows = await _rows(db_session, data["id"])
+    assert len(rows) == 3
+    assert {r.vw for r in rows} == {0}
+
+
 async def test_taps_rejects_more_than_50(api_client, db_session):
     data = await _create_project(api_client, "taps-too-many.com")
     taps = [{"x": 0.5, "y": i} for i in range(51)]
@@ -127,7 +137,8 @@ async def test_taps_rejects_out_of_range_fraction(api_client):
         _body(key, taps=[{"x": 0.5, "y": -1}]),
         _body(key, taps=[{"x": 0.5, "y": 100_001}]),
         _body(key, scroll=1.5),
-        _body(key, vw=50),
+        _body(key, vw=-1),
+        _body(key, vw=10_001),
         _body(key, viewport="watch"),
         _body(key, path=""),
     ]
