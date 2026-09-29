@@ -33,6 +33,10 @@ GRID_COLS = 10
 GRID_ROW_PX = 240
 GRID_MAX_ROWS = 40
 
+# Viewport widths below this are not real layouts (hidden tabs and iframes
+# report 0); the median viewport width skips them.
+MIN_VIEWPORT_WIDTH = 100
+
 
 # ── Write side ───────────────────────────────────────────────────────────────
 
@@ -267,11 +271,16 @@ async def median_viewport_width(
     start: datetime,
     end: datetime,
 ) -> int | None:
-    """Median ``vw`` over the taps in the window, or ``None`` without taps."""
+    """Median ``vw`` over the taps in the window, or ``None`` without taps.
+
+    Rows with ``vw`` below ``MIN_VIEWPORT_WIDTH`` (hidden tabs and iframes
+    report 0) are ignored.
+    """
     stmt = select(func.percentile_cont(0.5).within_group(Tap.vw)).where(
         *_filters(
             project_id=project_id, path=path, start=start, end=end, kind=TAP_KIND, device=device
-        )
+        ),
+        Tap.vw >= MIN_VIEWPORT_WIDTH,
     )
     value = (await session.execute(stmt)).scalar_one_or_none()
     return None if value is None else round(float(value))

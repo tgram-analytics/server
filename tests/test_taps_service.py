@@ -204,6 +204,23 @@ async def test_median_viewport_width_ignores_scroll_rows(db_session, project_id)
     assert await svc.median_viewport_width(db_session, **_window(project_id)) == 390
 
 
+async def test_median_viewport_width_ignores_zero_width(db_session, project_id):
+    db_session.add_all(
+        [
+            _tap(project_id, 0.1, 10, vw=0),
+            _tap(project_id, 0.1, 10, vw=0),
+            _tap(project_id, 0.1, 10, vw=0),
+            _tap(project_id, 0.1, 10, vw=390),
+            _tap(project_id, 0.1, 10, vw=412),
+        ]
+    )
+    await db_session.flush()
+
+    assert await svc.median_viewport_width(db_session, **_window(project_id)) == 401
+    # The taps still count; only the width median skips them.
+    assert await svc.count_taps(db_session, **_window(project_id)) == 5
+
+
 async def test_scroll_median_ignores_tap_rows(db_session, project_id):
     db_session.add_all(
         [

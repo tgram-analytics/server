@@ -161,7 +161,8 @@ class TapsRequest(BaseModel):
     session_id: str = Field(..., min_length=1, max_length=512)
     path: str = Field(..., min_length=1, max_length=2048)
     viewport: Literal["mobile", "tablet", "desktop"]
-    vw: int = Field(..., ge=100, le=10_000)
+    # 0 is allowed: some hidden tabs and iframes report innerWidth = 0.
+    vw: int = Field(..., ge=0, le=10_000)
     taps: list[TapPoint] = Field(default_factory=list, max_length=MAX_TAPS_PER_REQUEST)
     scroll: float | None = Field(default=None, ge=0, le=1)
 
