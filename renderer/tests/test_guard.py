@@ -4,7 +4,16 @@ import socket
 
 import guard
 import pytest
-from guard import GuardError, is_login_wall, is_public_ip, validate_target_url
+from guard import (
+    MAX_DEVICE_PIXELS,
+    CheckedTarget,
+    GuardError,
+    clip_height,
+    is_login_wall,
+    is_public_ip,
+    launch_args,
+    validate_target_url,
+)
 
 
 def _fake_getaddrinfo(mapping: dict[str, list[str]]):
@@ -53,7 +62,44 @@ def test_accepts_public_host(monkeypatch):
     monkeypatch.setattr(
         guard.socket, "getaddrinfo", _fake_getaddrinfo({"site.example": ["93.184.216.34"]})
     )
-    assert validate_target_url("https://site.example/a?b=1") == "https://site.example/a?b=1"
+    target = validate_target_url("https://site.example/a?b=1")
+    assert target == CheckedTarget(
+        url="https://site.example/a?b=1", host="site.example", ip="93.184.216.34"
+    )
+
+
+def test_launch_args_pin_the_checked_ip(monkeypatch):
+    # The browser must use the address the guard checked, not its own lookup.
+    monkeypatch.setattr(
+        guard.socket,
+        "getaddrinfo",
+        _fake_getaddrinfo({"site.example": ["2606:2800:220:1::1", "93.184.216.34"]}),
+    )
+    target = validate_target_url("https://site.example/")
+    args = launch_args(target)
+    rules = [a for a in args if a.startswith("--host-resolver-rules=")]
+    assert rules == ["--host-resolver-rules=MAP site.example 93.184.216.34, EXCLUDE localhost"]
+    assert "--block-new-web-contents" in args
+
+
+def test_launch_args_bracket_ipv6_and_skip_ip_literals():
+    v6 = launch_args(CheckedTarget(url="https://v6.example/", host="v6.example", ip="2606:2800::1"))
+    assert "--host-resolver-rules=MAP v6.example [2606:2800::1], EXCLUDE localhost" in v6
+    literal = launch_args(
+        CheckedTarget(url="http://93.184.216.34/", host="93.184.216.34", ip="93.184.216.34")
+    )
+    assert not any(a.startswith("--host-resolver-rules") for a in literal)
+
+
+def test_clip_height_keeps_pixel_budget():
+    # Ordinary mobile page: only max_height applies.
+    assert clip_height(390, 5569, 2, 6000) == 5569
+    assert clip_height(390, 9000, 2, 6000) == 6000
+    # Wide page at DPR 3: the budget cuts the height.
+    h = clip_height(2000, 20000, 3, 20000)
+    assert 2000 * 3 * h * 3 <= MAX_DEVICE_PIXELS
+    assert 2000 * 3 * (h + 1) * 3 > MAX_DEVICE_PIXELS
+    assert clip_height(2000, 1, 3, 6000) == 1
 
 
 def test_unresolvable_host_is_rejected(monkeypatch):
@@ -88,6 +134,22 @@ def test_is_public_ip():
     assert not is_public_ip("172.16.0.1")
     assert not is_public_ip("224.0.0.1")
     assert not is_public_ip("not-an-ip")
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "64:ff9b::7f00:1",  # NAT64 wrapping 127.0.0.1
+        "64:ff9b::a00:1",  # NAT64 wrapping 10.0.0.1
+        "64:ff9b::5db8:d822",  # NAT64 wrapping a public address: refused too
+        "64:ff9b:1::a00:1",  # local-use NAT64
+        "::7f00:1",  # IPv4-compatible ::127.0.0.1
+        "::a00:1",  # IPv4-compatible ::10.0.0.1
+        "2002:7f00:1::1",  # 6to4 wrapping 127.0.0.1
+    ],
+)
+def test_rejects_ipv6_forms_wrapping_ipv4(address):
+    assert not is_public_ip(address)
 
 
 def test_login_wall_detection_by_final_path():
