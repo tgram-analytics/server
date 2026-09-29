@@ -129,6 +129,17 @@ class Settings(BaseSettings):
     # (cloud overlay) supplies its own OAuth and this flag is inert.
     mcp_oauth_enabled: bool = True
 
+    # ── Heatmap screenshots (optional) ────────────────────────────────────
+    # Base URL of the screenshot renderer (``renderer/`` in this repo), e.g.
+    # ``http://renderer:8080`` in docker-compose. Empty = off: heatmaps are
+    # sent as text only. The renderer runs in its own container; the API
+    # process never starts a browser.
+    screenshot_url: str = ""
+    # Sent as ``Authorization: Bearer <token>``; must match RENDERER_TOKEN
+    # on the renderer. Leave empty when the renderer has no token.
+    screenshot_token: str = ""
+    screenshot_timeout_seconds: int = 45
+
     @property
     def mcp_effective_public_url(self) -> str:
         """Resolved public base URL for MCP metadata and allow-lists."""
