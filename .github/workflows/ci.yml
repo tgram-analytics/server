@@ -95,3 +95,36 @@ jobs:
         with:
           files: coverage.xml
         continue-on-error: true
+
+  renderer:
+    name: Renderer (guard tests + image build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Guard tests (standard library only)
+        run: |
+          pip install pytest pytest-asyncio
+          pytest renderer/tests
+
+      - name: Build renderer image
+        run: docker build -t tgram-renderer:ci renderer/
+
+      - name: Smoke test (health + one screenshot)
+        run: |
+          docker run -d --rm --name renderer -p 8080:8080 -e RENDERER_TOKEN=ci-token tgram-renderer:ci
+          for i in $(seq 1 30); do curl -sf http://localhost:8080/health && break; sleep 1; done
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:8080/shot?url=https://example.com/")
+          test "$code" = "401"
+          curl -sf -H "Authorization: Bearer ci-token" \
+            "http://localhost:8080/shot?url=https://example.com/&width=390&dpr=1" -o shot.png
+          head -c 8 shot.png | od -An -tx1 | grep -q '89 50 4e 47'
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ci-token" \
+            "http://localhost:8080/shot?url=http://169.254.169.254/")
+          test "$code" = "403"
+          docker stop renderer

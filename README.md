@@ -460,6 +460,34 @@ docker compose up -d
 
 Point your reverse proxy (Nginx/Caddy) at port `8000`.
 
+### Heatmap screenshots (optional)
+
+Tap heatmaps are drawn over a screenshot of the page. The screenshot comes
+from a small separate service in [`renderer/`](renderer/README.md)
+(headless Chromium). The API process never starts a browser. Without a
+renderer, heatmaps are sent as text only.
+
+With Docker Compose, start it through the `heatmaps` profile:
+
+```bash
+docker compose --profile heatmaps up -d
+```
+
+The `server` service already points at it (`SCREENSHOT_URL` defaults to
+`http://renderer:8080` in `docker-compose.yml`). The renderer is not
+published on a host port.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SCREENSHOT_URL` | empty (off) | Base URL of the renderer, e.g. `http://renderer:8080`. Empty = text-only heatmaps. |
+| `SCREENSHOT_TOKEN` | empty | Sent as `Authorization: Bearer <token>`. Must match `RENDERER_TOKEN` on the renderer. Required when the renderer is reachable from outside a private network. |
+| `SCREENSHOT_TIMEOUT_SECONDS` | `45` | How long the server waits for one screenshot. |
+
+The renderer loads the public page like a first-time visitor: no cookies,
+no login. Pages behind a login are detected and not drawn. It refuses URLs
+and sub-requests that resolve to private, loopback or link-local addresses.
+Plan for a 1 GB memory limit; see [`renderer/README.md`](renderer/README.md).
+
 ### Railway
 
 [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template)
