@@ -20,6 +20,7 @@ from app.jobs.scheduler import (
 from app.models.event import Event
 from app.models.project import Project
 from app.models.settings import ProjectSettings
+from app.models.tap import Tap
 from app.models.user import User
 
 
@@ -97,6 +98,7 @@ async def _seed(factory, retention_days: int):
 async def _cleanup(factory, project_id):
     async with factory() as session, session.begin():
         await session.execute(sa.delete(Event).where(Event.project_id == project_id))
+        await session.execute(sa.delete(Tap).where(Tap.project_id == project_id))
         await session.execute(
             sa.delete(ProjectSettings).where(ProjectSettings.project_id == project_id)
         )
@@ -135,6 +137,60 @@ async def test_retention_job_keeps_forever_when_zero(wired_db) -> None:
             new_row = await session.get(Event, new_id)
             assert old_row is not None
             assert new_row is not None
+    finally:
+        await _cleanup(factory, project_id)
+
+
+async def _seed_taps(factory, project_id) -> tuple[int, int, int]:
+    """Add an old tap, an old scroll row and a recent tap. Returns their ids."""
+    now = datetime.now(UTC)
+    async with factory() as session, session.begin():
+        rows = [
+            Tap(project_id=project_id, path="/", device="mobile", vw=390, x=0.5, y=10),
+            Tap(project_id=project_id, path="/", device="mobile", vw=390, kind="scroll", depth=0.4),
+            Tap(project_id=project_id, path="/", device="mobile", vw=390, x=0.2, y=20),
+        ]
+        session.add_all(rows)
+        await session.flush()
+        old_tap, old_scroll, new_tap = (r.id for r in rows)
+        await session.execute(
+            sa.update(Tap)
+            .where(Tap.id.in_([old_tap, old_scroll]))
+            .values(received_at=now - timedelta(days=100))
+        )
+        await session.execute(
+            sa.update(Tap).where(Tap.id == new_tap).values(received_at=now - timedelta(days=1))
+        )
+    return old_tap, old_scroll, new_tap
+
+
+async def test_retention_deletes_old_taps_keeps_recent(wired_db) -> None:
+    factory = wired_db
+    project_id, _old_id, _new_id = await _seed(factory, retention_days=30)
+    try:
+        old_tap, old_scroll, new_tap = await _seed_taps(factory, project_id)
+
+        deleted = await run_retention_job()
+        # One old event plus the old tap and the old scroll row.
+        assert deleted == 3
+
+        async with factory() as session:
+            assert await session.get(Tap, old_tap) is None
+            assert await session.get(Tap, old_scroll) is None
+            assert await session.get(Tap, new_tap) is not None
+    finally:
+        await _cleanup(factory, project_id)
+
+
+async def test_retention_keeps_taps_when_zero(wired_db) -> None:
+    factory = wired_db
+    project_id, _old_id, _new_id = await _seed(factory, retention_days=0)
+    try:
+        old_tap, _old_scroll, new_tap = await _seed_taps(factory, project_id)
+        assert await run_retention_job() == 0
+        async with factory() as session:
+            assert await session.get(Tap, old_tap) is not None
+            assert await session.get(Tap, new_tap) is not None
     finally:
         await _cleanup(factory, project_id)
 

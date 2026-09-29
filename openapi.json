@@ -199,6 +199,108 @@
         "title": "ProjectWithKeyResponse",
         "type": "object"
       },
+      "TapPoint": {
+        "description": "One tap. ``x`` is a fraction of the document width; ``y`` is CSS px\nfrom the document top (viewport px when the target is fixed or sticky).",
+        "properties": {
+          "el": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "El"
+          },
+          "x": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "X",
+            "type": "number"
+          },
+          "y": {
+            "maximum": 100000.0,
+            "minimum": 0.0,
+            "title": "Y",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "x",
+          "y"
+        ],
+        "title": "TapPoint",
+        "type": "object"
+      },
+      "TapsRequest": {
+        "description": "Body of ``POST /api/v1/taps``: the taps and scroll depth of one pageview.\n\n``session_id`` is accepted for parity with the other ingestion bodies but\nis never stored.",
+        "properties": {
+          "api_key": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Api Key",
+            "type": "string"
+          },
+          "path": {
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          },
+          "scroll": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scroll"
+          },
+          "session_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Session Id",
+            "type": "string"
+          },
+          "taps": {
+            "items": {
+              "$ref": "#/components/schemas/TapPoint"
+            },
+            "maxItems": 50,
+            "title": "Taps",
+            "type": "array"
+          },
+          "viewport": {
+            "enum": [
+              "mobile",
+              "tablet",
+              "desktop"
+            ],
+            "title": "Viewport",
+            "type": "string"
+          },
+          "vw": {
+            "maximum": 10000.0,
+            "minimum": 100.0,
+            "title": "Vw",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "api_key",
+          "session_id",
+          "path",
+          "viewport",
+          "vw"
+        ],
+        "title": "TapsRequest",
+        "type": "object"
+      },
       "TrackEventRequest": {
         "properties": {
           "api_key": {
@@ -504,6 +606,52 @@
           }
         },
         "summary": "Pageview",
+        "tags": [
+          "ingestion"
+        ]
+      }
+    },
+    "/api/v1/taps": {
+      "post": {
+        "description": "Ingest the taps and scroll depth of one pageview (tap heatmaps).\n\nSame authentication, rate limits and origin check as /track. Stores one\nrow per tap and one row for the scroll depth. ``session_id`` is not\nstored, no visitor hash is computed, and no alert is evaluated.",
+        "operationId": "taps_api_v1_taps_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TapsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Taps Api V1 Taps Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Taps",
         "tags": [
           "ingestion"
         ]

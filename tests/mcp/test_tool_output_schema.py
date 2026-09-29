@@ -72,6 +72,7 @@ V1_TOOLS = [
 
 ALL_TOOLS = [
     *V1_TOOLS,
+    "top_taps",
     "list_alerts",
     "alert_history",
     "create_alert",
@@ -114,6 +115,25 @@ def test_rotate_api_key_schema_declares_api_key_field(listed_tools) -> None:
     assert '"api_key"' in serialized
     assert '"project_id"' in serialized
     assert '"message"' in serialized
+
+
+def test_top_taps_schema_declares_known_fields(listed_tools) -> None:
+    """Lock in the TopTapsResult shape via the published schema."""
+    serialized = json.dumps(listed_tools["top_taps"].outputSchema)
+    for field in (
+        "path",
+        "device",
+        "period",
+        "total_taps",
+        "elements",
+        "pct",
+        "grid_cols",
+        "grid_row_px",
+        "grid",
+        "scroll_depth_median",
+        "median_viewport_width",
+    ):
+        assert f'"{field}"' in serialized, f"expected {field!r} in top_taps outputSchema"
 
 
 # ─── Model validation round-trip ────────────────────────────────────────────

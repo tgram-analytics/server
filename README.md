@@ -259,7 +259,7 @@ connector (paste an `/mcp_token` token in the browser page that opens).
 
 Available tools: `whoami`, `list_projects`, `get_project`,
 `list_event_names`, `query_events`, `compare_periods`, `top_pages`,
-`recent_events`, `top_property_values`, `list_property_keys`,
+`recent_events`, `top_property_values`, `list_property_keys`, `top_taps`,
 `verify_integration`, `get_integration_guide`, `get_sdk_snippet`,
 `rotate_api_key`, `create_project`, `get_project_request_status`, and the
 alert tools:
@@ -364,9 +364,18 @@ expectations out of the box, and so the managed version we operate at
 - **Log redaction.** A root-logger filter masks `proj_<64hex>`,
   `sk_(live|test)_*` API keys, and inline `email=…` / `password=…`
   patterns in every emitted log line.
+- **Tap heatmaps (opt-in in the SDK).** A tap row stores project, page
+  path, viewport bucket (mobile/tablet/desktop), the viewport width in CSS
+  px, the tap position (x as a fraction of the document width, y in CSS px
+  from the page top, or from the viewport top for fixed and sticky
+  elements), an element label (data-tga-label, aria-label, id, or
+  tag + up to 40 characters of visible text; never the value or text of
+  inputs, textareas, selects, or contenteditable elements), and the server
+  receive time. No session id, no visitor hash, no timestamp from the
+  client. Scroll depth is one number per pageview. Retention applies.
 - **Retention.** A nightly APScheduler job (03:00 UTC) deletes events
-  older than each project's `retention_days`. A value of `0` keeps
-  events forever — the default for self-host.
+  and taps older than each project's `retention_days`. A value of `0`
+  keeps them forever — the default for self-host.
 - **Audit log.** Destructive actions (project create/delete, settings
   changes, API-key rotation, suspension) are written to an append-only
   `audit_events` table. A Postgres trigger rejects UPDATE and DELETE
@@ -386,7 +395,7 @@ replica handled the request.
 
 ```
 app/
-├── api/          REST endpoints (track, pageview, projects)
+├── api/          REST endpoints (track, pageview, taps, projects)
 ├── bot/          Telegram bot handlers and conversation state
 ├── core/         Config, database engine, security utilities
 ├── models/       SQLAlchemy ORM models

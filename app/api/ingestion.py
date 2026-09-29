@@ -1,4 +1,4 @@
-"""Event ingestion endpoints: POST /api/v1/track and POST /api/v1/pageview.
+"""Ingestion endpoints: POST /api/v1/track, /api/v1/pageview and /api/v1/taps.
 
 Authentication: ``api_key`` field in the JSON request body.
 Rate limiting:  per-project sliding-window. Limit is
@@ -26,8 +26,9 @@ from app.core.database import get_session, get_session_factory
 from app.core.privacy import hash_visitor, parse_user_agent, scrub_properties
 from app.core.security import validate_api_key
 from app.core.telegram_ids import is_unreachable_chat_id
-from app.schemas.event import PageviewRequest, TrackEventRequest
+from app.schemas.event import PageviewRequest, TapsRequest, TrackEventRequest
 from app.services.events import evaluate_alerts, insert_event, is_origin_allowed
+from app.services.taps import insert_taps
 
 router = APIRouter(prefix="/api/v1", tags=["ingestion"])
 
@@ -426,4 +427,42 @@ async def pageview(
 
     # Privacy: same as /track — alerts must only ever see scrubbed properties.
     background_tasks.add_task(_run_alert_evaluation, project.id, "pageview", scrubbed)
+    return {"status": "accepted"}
+
+
+@router.post("/taps", status_code=202)
+async def taps(
+    body: TapsRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """Ingest the taps and scroll depth of one pageview (tap heatmaps).
+
+    Same authentication, rate limits and origin check as /track. Stores one
+    row per tap and one row for the scroll depth. ``session_id`` is not
+    stored, no visitor hash is computed, and no alert is evaluated.
+    """
+    origin = request.headers.get("origin")
+    client_ip = request.client.host if request.client else ""
+    project = await _resolve_project(
+        body.api_key, origin, session, settings.rate_limit_per_second, client_ip
+    )
+
+    ua = request.headers.get("user-agent", "")
+    _browser, _os_name, device_type = parse_user_agent(ua)
+    if device_type == "bot":
+        # Same as /track: crawlers are not visitors.
+        return {"status": "accepted"}
+
+    await insert_taps(
+        session,
+        project_id=project.id,
+        path=body.path,
+        device=body.viewport,
+        vw=body.vw,
+        taps=body.taps,
+        scroll=body.scroll,
+    )
+    await session.commit()
     return {"status": "accepted"}

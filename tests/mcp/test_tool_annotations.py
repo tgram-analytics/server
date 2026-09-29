@@ -61,6 +61,11 @@ EXPECTED: dict[str, dict[str, bool]] = {
         "idempotentHint": True,
         "openWorldHint": False,
     },
+    "top_taps": {
+        "readOnlyHint": True,
+        "idempotentHint": True,
+        "openWorldHint": False,
+    },
     "verify_integration": {
         "readOnlyHint": True,
         "idempotentHint": True,

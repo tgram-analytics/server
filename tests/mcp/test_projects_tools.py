@@ -416,6 +416,7 @@ async def test_all_twelve_tools_registered(fresh_mcp):
         "compare_periods",
         "top_pages",
         "recent_events",
+        "top_taps",
         "verify_integration",
         "get_integration_guide",
         "get_sdk_snippet",

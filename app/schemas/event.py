@@ -2,9 +2,9 @@
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # Reject timestamps more than 1 day in the future or more than 1 year in the past.
 _MAX_FUTURE = timedelta(days=1)
@@ -122,6 +122,54 @@ class PageviewRequest(BaseModel):
 
     _validate_timestamp = field_validator("timestamp")(_validate_timestamp)
     _validate_properties = field_validator("properties")(_validate_properties)
+
+
+# Max taps in one /taps request. The SDK flushes at this size.
+MAX_TAPS_PER_REQUEST = 50
+
+# Max stored length of a tap's element label.
+MAX_TAP_LABEL_LEN = 80
+
+
+class TapPoint(BaseModel):
+    """One tap. ``x`` is a fraction of the document width; ``y`` is CSS px
+    from the document top (viewport px when the target is fixed or sticky)."""
+
+    x: float = Field(..., ge=0, le=1)
+    y: int = Field(..., ge=0, le=100_000)
+    # Longer labels are cut to MAX_TAP_LABEL_LEN, not rejected: a long label
+    # must not drop the whole batch.
+    el: str | None = None
+
+    @field_validator("el")
+    @classmethod
+    def _truncate_label(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v[:MAX_TAP_LABEL_LEN]
+        return v or None
+
+
+class TapsRequest(BaseModel):
+    """Body of ``POST /api/v1/taps``: the taps and scroll depth of one pageview.
+
+    ``session_id`` is accepted for parity with the other ingestion bodies but
+    is never stored.
+    """
+
+    api_key: str = Field(..., min_length=1, max_length=255)
+    session_id: str = Field(..., min_length=1, max_length=512)
+    path: str = Field(..., min_length=1, max_length=2048)
+    viewport: Literal["mobile", "tablet", "desktop"]
+    vw: int = Field(..., ge=100, le=10_000)
+    taps: list[TapPoint] = Field(default_factory=list, max_length=MAX_TAPS_PER_REQUEST)
+    scroll: float | None = Field(default=None, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def _not_empty(self) -> Self:
+        if not self.taps and self.scroll is None:
+            raise ValueError("taps is empty and scroll is null; nothing to store")
+        return self
 
 
 class EventResponse(BaseModel):

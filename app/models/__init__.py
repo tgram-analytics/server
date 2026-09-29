@@ -17,6 +17,7 @@ from app.models.project import Project
 from app.models.project_create_request import ProjectCreateRequest
 from app.models.scheduled_report import ChartPeriod, ReportFrequency, ScheduledReport
 from app.models.settings import ProjectSettings
+from app.models.tap import Tap
 from app.models.user import User
 
 __all__ = [
@@ -38,4 +39,5 @@ __all__ = [
     "ChartPeriod",
     "BotConversationState",
     "ProjectSettings",
+    "Tap",
 ]

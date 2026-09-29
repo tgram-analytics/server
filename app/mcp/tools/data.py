@@ -12,6 +12,7 @@ Four handlers, all project-scoped (every one calls
   (the generalisation of ``top_pages``).
 - ``list_property_keys`` — which JSONB property keys an event carries.
 - ``recent_events`` — most-recent N events (newest first).
+- ``top_taps`` — most-tapped elements and a tap-count grid for one page.
 """
 
 from __future__ import annotations
@@ -41,10 +42,12 @@ from app.mcp.tools._schemas import (
     QueryEventsResult,
     RecentEventRow,
     RecentEventsResult,
+    TapElementRow,
     TimeBucket,
     TopPagesResult,
     TopPagesRow,
     TopPropertyValuesResult,
+    TopTapsResult,
 )
 from app.mcp.tools._session import open_session
 
@@ -59,6 +62,8 @@ _READ_ONLY = ToolAnnotations(
 )
 
 _VALID_GRANULARITIES: tuple[str, ...] = ("hour", "day", "week", "month")
+
+_VALID_TAP_DEVICES: tuple[str, ...] = ("mobile", "tablet", "desktop", "all")
 
 
 def _not_authenticated() -> list[TextContent]:
@@ -92,7 +97,7 @@ def _bad_input(msg: str) -> list[TextContent]:
 
 
 def register_data_tools(mcp: FastMCP) -> None:
-    """Register the four event-data tools onto *mcp*."""
+    """Register the event-data tools onto *mcp*."""
 
     @mcp.tool(title="Query events", annotations=_READ_ONLY)
     async def query_events(
@@ -447,6 +452,105 @@ def register_data_tools(mcp: FastMCP) -> None:
             for r in rows
         ]
         return RecentEventsResult(events=events)
+
+    @mcp.tool(title="Top taps", annotations=_READ_ONLY)
+    async def top_taps(
+        project_id: str,
+        path: str,
+        period: str = "7d",
+        device: str = "all",
+    ) -> list[TextContent] | TopTapsResult:
+        """Return where visitors tap on one page (tap heatmap data).
+
+        Needs the web SDK's tap heatmaps turned on. *path* is the page path
+        as the pageview ``url`` stores it (for example ``"/"`` or
+        ``"/pricing"``). *device* is ``mobile``, ``tablet``, ``desktop`` or
+        ``all``.
+
+        Response: ``total_taps``; ``elements`` = the 10 most-tapped element
+        labels with ``count`` and ``pct`` (share of all taps on the page);
+        ``grid`` = tap counts in rows of ``grid_row_px`` (240) CSS px from
+        the page top (row 0 = top of the page, at most 40 rows, deeper taps
+        in the last row) by ``grid_cols`` (10) columns across the document
+        width; ``scroll_depth_median`` (0..1) and ``median_viewport_width``
+        (CSS px).
+        """
+        token = get_access_token()
+        if token is None or not isinstance(token, MCPAccessToken):
+            return _not_authenticated()
+
+        try:
+            pid = uuid.UUID(project_id)
+        except (ValueError, AttributeError):
+            return _bad_input(f"invalid project_id {project_id!r}; must be a UUID")
+
+        if not isinstance(path, str) or not path or len(path) > 2048:
+            return _bad_input("path is required and must be 1..2048 characters")
+
+        if device not in _VALID_TAP_DEVICES:
+            return _bad_input(
+                f"invalid device {device!r}; expected one of {list(_VALID_TAP_DEVICES)}"
+            )
+
+        try:
+            start, end = period_to_window(period)
+        except InvalidPeriodError as exc:
+            return _bad_input(str(exc))
+
+        owner_user_id = uuid.UUID(token.extra["user_id"])
+
+        from app.services import taps as taps_svc
+
+        async with open_session() as session:
+            try:
+                await assert_project_owned_by(session, pid, owner_user_id)
+            except ProjectNotOwnedError:
+                return _not_owned_error(project_id)
+
+            total = await taps_svc.count_taps(
+                session, project_id=pid, path=path, device=device, start=start, end=end
+            )
+            rows = await taps_svc.top_elements(
+                session, project_id=pid, path=path, device=device, start=start, end=end, limit=10
+            )
+            grid = await taps_svc.tap_grid(
+                session,
+                project_id=pid,
+                path=path,
+                device=device,
+                start=start,
+                end=end,
+                cols=taps_svc.GRID_COLS,
+                row_px=taps_svc.GRID_ROW_PX,
+                max_rows=taps_svc.GRID_MAX_ROWS,
+            )
+            scroll_median = await taps_svc.scroll_depth_median(
+                session, project_id=pid, path=path, device=device, start=start, end=end
+            )
+            vw_median = await taps_svc.median_viewport_width(
+                session, project_id=pid, path=path, device=device, start=start, end=end
+            )
+
+        elements = [
+            TapElementRow(
+                label=r["label"],
+                count=r["count"],
+                pct=round(r["count"] * 100.0 / total, 1) if total else 0.0,
+            )
+            for r in rows
+        ]
+        return TopTapsResult(
+            path=path,
+            device=device,
+            period=period,
+            total_taps=total,
+            elements=elements,
+            grid_cols=taps_svc.GRID_COLS,
+            grid_row_px=taps_svc.GRID_ROW_PX,
+            grid=grid,
+            scroll_depth_median=scroll_median,
+            median_viewport_width=vw_median,
+        )
 
 
 __all__ = ["register_data_tools", "SUPPORTED_PERIODS"]

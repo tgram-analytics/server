@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.aggregation import Aggregation, AggregationPeriod
 from app.models.event import Event
 from app.models.settings import ProjectSettings
+from app.models.tap import Tap
 
 
 def _period_start(dt: datetime, period: AggregationPeriod) -> datetime:
@@ -80,10 +81,10 @@ async def run_aggregation_cron(session: AsyncSession) -> int:
 
 
 async def run_retention_cron(session: AsyncSession) -> int:
-    """Delete events older than each project's ``retention_days`` setting.
+    """Delete events and taps older than each project's ``retention_days``.
 
     A ``retention_days`` value of 0 means keep forever (no deletion).
-    Returns the total number of event rows deleted.
+    Returns the total number of rows deleted (events plus taps).
     """
     now = datetime.now(UTC)
     settings_rows = await session.execute(select(ProjectSettings))
@@ -97,6 +98,13 @@ async def run_retention_cron(session: AsyncSession) -> int:
             delete(Event).where(
                 Event.project_id == settings.project_id,
                 Event.received_at < cutoff,
+            )
+        )
+        total_deleted += result.rowcount  # type: ignore[attr-defined]
+        result = await session.execute(
+            delete(Tap).where(
+                Tap.project_id == settings.project_id,
+                Tap.received_at < cutoff,
             )
         )
         total_deleted += result.rowcount  # type: ignore[attr-defined]
