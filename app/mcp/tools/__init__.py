@@ -14,7 +14,8 @@ bringing the v1 surface (excluding ``whoami``, which is wired inline by
 - Discovery / metadata:
   ``list_projects``, ``get_project``, ``list_event_names``.
 - Analytics:
-  ``query_events``, ``compare_periods``, ``top_pages``, ``recent_events``.
+  ``query_events``, ``compare_periods``, ``top_pages``, ``recent_events``,
+  ``top_taps``.
 - Setup / docs:
   ``verify_integration``, ``get_integration_guide``, ``get_sdk_snippet``.
 - Project mutation:

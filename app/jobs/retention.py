@@ -1,4 +1,4 @@
-"""Nightly retention job: delete events older than per-project retention_days.
+"""Nightly retention job: delete events and taps older than per-project retention_days.
 
 Wraps app.services.aggregation.run_retention_cron in a session+transaction
 boundary so it can be scheduled by APScheduler.

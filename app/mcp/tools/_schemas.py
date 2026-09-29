@@ -141,6 +141,40 @@ class RecentEventsResult(BaseModel):
     events: list[RecentEventRow]
 
 
+class TapElementRow(BaseModel):
+    """One row of :func:`top_taps` ``elements``."""
+
+    label: str | None = Field(None, description="Element label; null for taps without one.")
+    count: int
+    pct: float = Field(..., description="Share of all taps on the page in the period, 0..100.")
+
+
+class TopTapsResult(BaseModel):
+    """Result of :func:`top_taps`."""
+
+    path: str
+    device: str
+    period: str
+    total_taps: int
+    elements: list[TapElementRow]
+    grid_cols: int = Field(..., description="Columns across the document width.")
+    grid_row_px: int = Field(..., description="Height of one grid row in CSS px.")
+    grid: list[list[int]] = Field(
+        ...,
+        description=(
+            "Tap counts. grid[i][j]: row i covers y in [i*grid_row_px, (i+1)*grid_row_px) "
+            "CSS px from the page top; column j covers x in [j/grid_cols, (j+1)/grid_cols) "
+            "of the document width. Trimmed after the last non-empty row."
+        ),
+    )
+    scroll_depth_median: float | None = Field(
+        None, description="Median maximum scroll depth per pageview, 0..1."
+    )
+    median_viewport_width: int | None = Field(
+        None, description="Median viewport width in CSS px over the taps."
+    )
+
+
 class PropertyValueRow(BaseModel):
     """One row of :func:`top_property_values` — a distinct value + its count."""
 

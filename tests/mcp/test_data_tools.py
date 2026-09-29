@@ -617,3 +617,173 @@ async def test_recent_events_cross_user_403(
     assert isinstance(result, list)
     assert result[0].isError is True
     rec_mock.assert_not_awaited()
+
+
+# ── top_taps ────────────────────────────────────────────────────────────────
+
+
+def _mock_taps_services(monkeypatch, *, total=100, rows=None, grid=None):
+    """Patch every app.services.taps query top_taps calls; return the mocks."""
+    mocks = {
+        "count_taps": AsyncMock(return_value=total),
+        "top_elements": AsyncMock(return_value=rows if rows is not None else []),
+        "tap_grid": AsyncMock(return_value=grid if grid is not None else []),
+        "scroll_depth_median": AsyncMock(return_value=0.62),
+        "median_viewport_width": AsyncMock(return_value=390),
+    }
+    for name, mock in mocks.items():
+        monkeypatch.setattr(f"app.services.taps.{name}", mock)
+    return mocks
+
+
+async def test_top_taps_no_token(fresh_mcp, call_tool, set_auth_token, project_a_id):
+    with set_auth_token(None):
+        result = await call_tool(fresh_mcp, "top_taps", project_id=str(project_a_id), path="/")
+    assert isinstance(result, list)
+    assert result[0].isError is True
+
+
+async def test_top_taps_invalid_device(
+    fresh_mcp, call_tool, set_auth_token, monkeypatch, user_a_id, project_a_id
+):
+    mocks = _mock_taps_services(monkeypatch)
+    from tests.mcp.conftest import _make_token
+
+    with set_auth_token(_make_token(user_a_id)):
+        result = await call_tool(
+            fresh_mcp, "top_taps", project_id=str(project_a_id), path="/", device="watch"
+        )
+    assert isinstance(result, list)
+    assert result[0].isError is True
+    assert "invalid device" in result[0].text
+    mocks["count_taps"].assert_not_awaited()
+
+
+async def test_top_taps_invalid_period(
+    fresh_mcp, call_tool, set_auth_token, monkeypatch, user_a_id, project_a_id
+):
+    mocks = _mock_taps_services(monkeypatch)
+    from tests.mcp.conftest import _make_token
+
+    with set_auth_token(_make_token(user_a_id)):
+        result = await call_tool(
+            fresh_mcp, "top_taps", project_id=str(project_a_id), path="/", period="bogus"
+        )
+    assert isinstance(result, list)
+    assert result[0].isError is True
+    assert "unsupported period" in result[0].text
+    mocks["count_taps"].assert_not_awaited()
+
+
+async def test_top_taps_empty_path(fresh_mcp, call_tool, set_auth_token, user_a_id, project_a_id):
+    from tests.mcp.conftest import _make_token
+
+    with set_auth_token(_make_token(user_a_id)):
+        result = await call_tool(fresh_mcp, "top_taps", project_id=str(project_a_id), path="")
+    assert isinstance(result, list)
+    assert result[0].isError is True
+    assert "path" in result[0].text
+
+
+async def test_top_taps_cross_user_does_not_query(
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    monkeypatch,
+    patch_open_session,
+    user_b_id,
+    project_a_id,
+):
+    monkeypatch.setattr(
+        "app.services.projects.get_project",
+        AsyncMock(return_value=None),
+    )
+    mocks = _mock_taps_services(monkeypatch)
+    from tests.mcp.conftest import _make_token
+
+    with set_auth_token(_make_token(user_b_id)):
+        result = await call_tool(fresh_mcp, "top_taps", project_id=str(project_a_id), path="/")
+    assert isinstance(result, list)
+    assert result[0].isError is True
+    for mock in mocks.values():
+        mock.assert_not_awaited()
+
+
+async def test_top_taps_happy_path_shape(
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    monkeypatch,
+    patch_open_session,
+    user_a_id,
+    project_a_id,
+):
+    project = _project_obj(project_a_id, owner=user_a_id)
+    monkeypatch.setattr(
+        "app.services.projects.get_project",
+        AsyncMock(return_value=project),
+    )
+    rows = [
+        {"label": 'button "Browse albums"', "count": 50},
+        {"label": "Menu", "count": 30},
+        {"label": None, "count": 20},
+    ]
+    grid = [[i + j for j in range(10)] for i in range(20)]
+    mocks = _mock_taps_services(monkeypatch, total=100, rows=rows, grid=grid)
+
+    from tests.mcp.conftest import _make_token
+
+    with set_auth_token(_make_token(user_a_id)):
+        result = await call_tool(
+            fresh_mcp,
+            "top_taps",
+            project_id=str(project_a_id),
+            path="/browse",
+            period="30d",
+            device="mobile",
+        )
+
+    assert isinstance(result, dict)
+    assert result["path"] == "/browse"
+    assert result["device"] == "mobile"
+    assert result["period"] == "30d"
+    assert result["total_taps"] == 100
+    assert [e["label"] for e in result["elements"]] == ['button "Browse albums"', "Menu", None]
+    assert [e["pct"] for e in result["elements"]] == [50.0, 30.0, 20.0]
+    assert abs(sum(e["pct"] for e in result["elements"]) - 100) < 0.5
+    assert result["grid_cols"] == 10
+    assert result["grid_row_px"] == 240
+    assert len(result["grid"]) == 20
+    assert all(len(r) == 10 for r in result["grid"])
+    assert result["scroll_depth_median"] == 0.62
+    assert result["median_viewport_width"] == 390
+
+    kwargs = mocks["top_elements"].await_args.kwargs
+    assert kwargs["project_id"] == project_a_id
+    assert kwargs["path"] == "/browse"
+    assert kwargs["device"] == "mobile"
+    assert kwargs["limit"] == 10
+    grid_kwargs = mocks["tap_grid"].await_args.kwargs
+    assert (grid_kwargs["cols"], grid_kwargs["row_px"], grid_kwargs["max_rows"]) == (10, 240, 40)
+
+
+async def test_top_taps_zero_taps_has_zero_pct(
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    monkeypatch,
+    patch_open_session,
+    user_a_id,
+    project_a_id,
+):
+    project = _project_obj(project_a_id, owner=user_a_id)
+    monkeypatch.setattr("app.services.projects.get_project", AsyncMock(return_value=project))
+    _mock_taps_services(monkeypatch, total=0)
+    from tests.mcp.conftest import _make_token
+
+    with set_auth_token(_make_token(user_a_id)):
+        result = await call_tool(fresh_mcp, "top_taps", project_id=str(project_a_id), path="/")
+    assert isinstance(result, dict)
+    assert result["total_taps"] == 0
+    assert result["elements"] == []
+    assert result["grid"] == []
