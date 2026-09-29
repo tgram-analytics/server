@@ -16,6 +16,7 @@ _HELP_TEXT = (
     "/projects — list all your projects (tap one for Events, Reports, and more)\n"
     "/digest — weekly summary (events, sessions, top events, deltas) across all projects\n"
     "/alerts — list all active alerts across all projects\n"
+    "/heatmap — tap heatmap for a page (where visitors tap, per device)\n"
     "/doctor — run a health check across all your projects\n"
     "/mcp — connect an AI agent (Claude etc.) to your analytics\n"
     "/mcp_token — manage MCP access tokens\n"
