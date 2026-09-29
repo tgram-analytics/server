@@ -213,3 +213,11 @@ async def test_fetch_screenshot_returns_none_for_unknown_device():
         route = router.get(f"{RENDERER}/shot").mock(return_value=httpx.Response(200))
         assert await fetch_screenshot("https://a.example/", "all", settings=_settings()) is None
     assert not route.called
+
+
+def test_draw_heat_layer_single_point_is_red_at_centre():
+    """The hottest spot always reaches the top of the colour scale, even alone."""
+    width, height = 400, 800
+    out = Image.open(io.BytesIO(draw_heat_layer(_png(width, height), [(0.5, 300)], dpr=1)))
+    r, g, b = out.convert("RGB").getpixel((int(0.5 * (width - 1)), 300))
+    assert r > 200 and g < 100 and b < 100
