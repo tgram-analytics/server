@@ -70,6 +70,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     from app.bot.handlers.events import events_callback
     from app.bot.handlers.export import export_callback
     from app.bot.handlers.funnels import funnel_callback
+    from app.bot.handlers.heatmap import heatmap_callback, heatmap_command
     from app.bot.handlers.mcp import mcp_command
     from app.bot.handlers.mcp_tokens import mcp_token_callback, mcp_token_command
     from app.bot.handlers.onboarding import onboarding_callback
@@ -108,6 +109,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     app.add_handler(CommandHandler("digest", digest_command, filters=handler_filter))
     app.add_handler(CommandHandler("overview", overview_command, filters=handler_filter))
     app.add_handler(CommandHandler("alerts", alerts_command, filters=handler_filter))
+    app.add_handler(CommandHandler("heatmap", heatmap_command, filters=handler_filter))
     app.add_handler(CommandHandler("doctor", doctor_command, filters=handler_filter))
     app.add_handler(CommandHandler("mcp", mcp_command, filters=handler_filter))
     app.add_handler(CommandHandler("mcp_token", mcp_token_command, filters=handler_filter))
@@ -119,6 +121,7 @@ def build_application(token: str, admin_chat_id: int) -> Application[Any, Any, A
     app.add_handler(CallbackQueryHandler(events_callback, pattern=r"^(evt[a:]|back:events)"))
     app.add_handler(CallbackQueryHandler(export_callback, pattern=r"^exp:"))
     app.add_handler(CallbackQueryHandler(funnel_callback, pattern=r"^(fnl_|back:funnels:)"))
+    app.add_handler(CallbackQueryHandler(heatmap_callback, pattern=r"^hm:"))
     app.add_handler(CallbackQueryHandler(onboarding_callback, pattern=r"^onb:"))
     app.add_handler(CallbackQueryHandler(mcp_token_callback, pattern=r"^mcptok:"))
     app.add_handler(CallbackQueryHandler(project_request_callback, pattern=r"^pcr:"))
@@ -178,6 +181,7 @@ async def init_bot(
             BotCommand("digest", "Weekly digest across all projects"),
             BotCommand("overview", "Visits chart across all projects"),
             BotCommand("alerts", "List active alerts"),
+            BotCommand("heatmap", "Tap heatmap for a page"),
             BotCommand("add", "Create a new project"),
             BotCommand("doctor", "Health check across all projects"),
             BotCommand("mcp", "Connect an AI agent (MCP)"),

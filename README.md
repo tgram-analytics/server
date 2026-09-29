@@ -227,6 +227,7 @@ An empty allowlist allows all origins.
 | `/digest` | Last-7-days recap: sessions and alerted-event counts with week-over-week deltas, per project |
 | `/overview` | Multi-line visits chart across all projects |
 | `/alerts` | List active alerts across all projects |
+| `/heatmap` | Tap heatmap for a page: top tapped elements, then the page screenshot with the heat layer (needs `heatmaps: true` in the JS SDK) |
 | `/doctor` | Health check across all projects (silent projects, open allowlists) |
 | `/mcp` | Setup instructions for connecting an AI agent (MCP) |
 | `/mcp_token` | Manage static MCP access tokens (`/mcp_token new [label]` to create) |
