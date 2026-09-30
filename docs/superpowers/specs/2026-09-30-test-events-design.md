@@ -40,14 +40,16 @@ Rejected alternatives:
 
 ## Data model
 
-Migration `0013_events_is_test`:
+Migration `0015_events_is_test` (main is at `0014_taps`):
 
 ```sql
 ALTER TABLE events ADD COLUMN is_test boolean NOT NULL DEFAULT false;
 ```
 
 Postgres 11+ adds a column with a constant default as a metadata-only change,
-so the table is not rewritten. No new index: the existing
+so the table is not rewritten.
+
+(The `taps` table does not get the column. See "Taps" below.) No new index: the existing
 `(project_id, event_name, timestamp)` index still drives every query, and the
 extra predicate is evaluated on the matched rows.
 
@@ -96,12 +98,12 @@ Raw SQL strings use `AND NOT is_test`.
 | File | Queries |
 |---|---|
 | `app/services/analytics.py` | `count_events`, `events_over_time`, `top_properties`, `top_array_elements` (raw SQL), `find_array_property_keys` (raw SQL), `list_event_names`, `list_property_keys`, `compare_periods` |
-| `app/services/aggregation.py` | hourly rollup `select` at line 50 |
-| `app/services/events.py` | `evaluate_alerts` threshold count at line 99 |
-| `app/services/funnels.py` | both step queries (lines 97, 119) |
-| `app/bot/handlers/reports.py` | all queries (lines 99, 141, 148, 153) |
-| `app/bot/handlers/digest.py` | all queries (lines 57, 66, 88, 102) |
-| `app/bot/handlers/export.py` | export query at line 60 |
+| `app/services/aggregation.py` | hourly rollup `select` |
+| `app/services/events.py` | `evaluate_alerts` threshold count |
+| `app/services/funnels.py` | both step queries |
+| `app/bot/handlers/reports.py` | all 4 queries |
+| `app/bot/handlers/digest.py` | all 3 queries |
+| `app/bot/handlers/export.py` | the export query |
 
 MCP tools `query_events`, `top_pages`, `top_property_values`, `top_taps`,
 `compare_periods`, `list_event_names` and `list_property_keys` go through
@@ -115,13 +117,13 @@ each one by test.
 | `list_recent_events` (bot) | Test rows are prefixed with 🧪 |
 | MCP `recent_events` | Each row gets `"is_test": true/false` |
 | MCP `verify_integration` | Counts all events. Response adds `test_count: int` |
-| `/doctor` (`app/bot/handlers/doctor.py:71`) | Counts all events, reports how many are test |
+| `/doctor` (`app/bot/handlers/doctor.py`) | Counts all events, reports how many are test |
 
 Each of these call sites gets a comment: `# includes test events on purpose`.
 
 ### Not filtered
 
-`aggregation.py:98` is the retention `delete`. It must delete test rows too.
+The retention `delete(Event)` in `aggregation.py` is not filtered. It must delete test rows too.
 
 ### Guard test
 
@@ -130,6 +132,14 @@ starts an events query (`select(Event`, `select(` followed by `Event.` columns,
 `FROM events`), the enclosing statement must contain `REAL_EVENTS`,
 `NOT is_test`, or the marker comment `# includes test events on purpose`.
 A `delete(Event)` is exempt. New queries that forget the filter fail CI.
+
+## Taps (heatmaps)
+
+`POST /api/v1/taps` (`TapsRequest`) gets the same `test: bool = False` field
+and the same localhost rule. A test taps request returns
+`{"status": "accepted"}` and stores nothing, the same way the endpoint already
+treats bot traffic. Taps have no debug view, so a column would add storage
+with no reader.
 
 ## SDKs
 
@@ -170,6 +180,7 @@ Example text for the README subsection:
 ## Testing
 
 - Ingestion: `test: true` stores `is_test = true`. Default stores `false`.
+- Taps: a test or localhost taps request stores no rows and returns 202.
 - Localhost rule: one case per host variant in `Origin`, one in pageview `url`,
   and negative cases (`localhost.example.com`, `127.example.com`, missing
   header).
