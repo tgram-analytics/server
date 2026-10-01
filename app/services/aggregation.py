@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.aggregation import Aggregation, AggregationPeriod
-from app.models.event import Event
+from app.models.event import REAL_EVENTS, Event
 from app.models.settings import ProjectSettings
 from app.models.tap import Tap
 
@@ -52,7 +52,7 @@ async def run_aggregation_cron(session: AsyncSession) -> int:
                 Event.event_name,
                 func.count().label("cnt"),
             )
-            .where(Event.timestamp >= period_start, Event.timestamp <= now)
+            .where(Event.timestamp >= period_start, Event.timestamp <= now, REAL_EVENTS)
             .group_by(Event.project_id, Event.event_name)
         )
 

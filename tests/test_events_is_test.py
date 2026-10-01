@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -198,3 +199,188 @@ async def test_test_taps_store_nothing(api_client, db_session):
         .all()
     )
     assert rows == []
+
+
+# ── Analytics read paths exclude test events ──────────────────────────────────
+
+
+async def _seed_pair(session, project_id, *, event_name="signup", properties=None, sid="s"):
+    """One real and one test event, same name, same time window."""
+    now = datetime.now(UTC) - timedelta(minutes=5)
+    props = properties or {}
+    session.add(
+        Event(
+            project_id=project_id,
+            event_name=event_name,
+            session_id=f"{sid}-real",
+            properties=props,
+            timestamp=now,
+        )
+    )
+    session.add(
+        Event(
+            project_id=project_id,
+            event_name=event_name,
+            session_id=f"{sid}-test",
+            properties=props,
+            timestamp=now,
+            is_test=True,
+        )
+    )
+    await session.flush()
+
+
+def _window():
+    now = datetime.now(UTC)
+    return now - timedelta(days=1), now + timedelta(minutes=1)
+
+
+async def test_analytics_functions_exclude_test(singleton_user, db_session):
+    from app.services import analytics as a
+
+    project = await _project(db_session, singleton_user.id, "analytics-excl.com")
+    await _seed_pair(db_session, project.id, properties={"plan": "pro", "tags": ["x"]})
+    start, end = _window()
+    kw = {"project_id": project.id, "event_name": "signup", "start": start, "end": end}
+
+    assert await a.count_events(db_session, **kw) == 1
+    series = await a.events_over_time(db_session, granularity="day", **kw)
+    assert sum(r["count"] for r in series) == 1
+    assert await a.top_properties(db_session, property_key="plan", **kw) == [
+        {"value": "pro", "count": 1}
+    ]
+    assert await a.top_array_elements(db_session, property_key="tags", **kw) == [
+        {"value": "x", "count": 1}
+    ]
+    names = await a.list_event_names(db_session, project_id=project.id)
+    assert [(n["event_name"], n["count"]) for n in names] == [("signup", 1)]
+    cmp = await a.compare_periods(
+        db_session,
+        project_id=project.id,
+        event_name="signup",
+        current_start=start,
+        current_end=end,
+        previous_start=start - timedelta(days=1),
+        previous_end=start,
+    )
+    assert cmp["current"] == 1
+
+
+async def test_property_keys_ignore_test_only_keys(singleton_user, db_session):
+    from app.services import analytics as a
+
+    project = await _project(db_session, singleton_user.id, "keys-excl.com")
+    now = datetime.now(UTC) - timedelta(minutes=5)
+    db_session.add(
+        Event(
+            project_id=project.id,
+            event_name="e",
+            session_id="r",
+            properties={"a": 1},
+            timestamp=now,
+        )
+    )
+    db_session.add(
+        Event(
+            project_id=project.id,
+            event_name="e",
+            session_id="t",
+            properties={"mock_only": ["z"]},
+            timestamp=now,
+            is_test=True,
+        )
+    )
+    await db_session.flush()
+    start, end = _window()
+    kw = {"project_id": project.id, "event_name": "e", "start": start, "end": end}
+
+    assert await a.list_property_keys(db_session, **kw) == ["a"]
+    assert await a.find_array_property_keys(db_session, **kw) == set()
+
+
+async def test_test_events_only_project_has_no_event_names(singleton_user, db_session):
+    from app.services import analytics as a
+
+    project = await _project(db_session, singleton_user.id, "only-test.com")
+    db_session.add(
+        Event(project_id=project.id, event_name="e", session_id="t", properties={}, is_test=True)
+    )
+    await db_session.flush()
+    assert await a.list_event_names(db_session, project_id=project.id) == []
+
+
+async def test_aggregation_rollup_excludes_test(singleton_user, db_session):
+    from app.models.aggregation import Aggregation, AggregationPeriod
+    from app.services.aggregation import run_aggregation_cron
+
+    project = await _project(db_session, singleton_user.id, "agg-excl.com")
+    await _seed_pair(db_session, project.id)
+    # Seed at "now" so the current hour bucket includes both rows.
+    for e in (
+        await db_session.execute(select(Event).where(Event.project_id == project.id))
+    ).scalars():
+        e.timestamp = datetime.now(UTC) - timedelta(seconds=1)
+    await db_session.flush()
+
+    await run_aggregation_cron(db_session)
+    row = (
+        await db_session.execute(
+            select(Aggregation).where(
+                Aggregation.project_id == project.id,
+                Aggregation.period == AggregationPeriod.day,
+            )
+        )
+    ).scalar_one()
+    assert row.count == 1
+
+
+async def test_threshold_alert_ignores_test_rows(singleton_user, db_session):
+    from app.models.alert import Alert, AlertCondition
+    from app.services.events import evaluate_alerts
+
+    project = await _project(db_session, singleton_user.id, "alert-excl.com")
+    db_session.add(
+        Alert(
+            project_id=project.id,
+            event_name="signup",
+            condition=AlertCondition.threshold,
+            threshold_n=2,
+        )
+    )
+    await _seed_pair(db_session, project.id)
+    fired = await evaluate_alerts(db_session, project_id=project.id, event_name="signup")
+    assert fired == []
+
+
+async def test_funnel_excludes_test(singleton_user, db_session):
+    from app.services.funnels import analyze_funnel, create_funnel
+
+    project = await _project(db_session, singleton_user.id, "funnel-excl.com")
+    now = datetime.now(UTC) - timedelta(minutes=10)
+    for sid, is_test in (("real", False), ("test", True)):
+        db_session.add(
+            Event(
+                project_id=project.id,
+                event_name="view",
+                session_id=sid,
+                properties={},
+                timestamp=now,
+                is_test=is_test,
+            )
+        )
+        db_session.add(
+            Event(
+                project_id=project.id,
+                event_name="buy",
+                session_id=sid,
+                properties={},
+                timestamp=now + timedelta(minutes=1),
+                is_test=is_test,
+            )
+        )
+    funnel = await create_funnel(
+        db_session, project_id=project.id, name="f", steps=["view", "buy"], time_window=3600
+    )
+    start, end = _window()
+    result = await analyze_funnel(db_session, funnel=funnel, start=start, end=end)
+    assert [r["count"] for r in result] == [1, 1]

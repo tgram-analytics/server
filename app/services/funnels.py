@@ -7,7 +7,7 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.event import Event
+from app.models.event import REAL_EVENTS, Event
 from app.models.funnel import Funnel
 
 # ── CRUD ──────────────────────────────────────────────────────────────────────
@@ -104,6 +104,7 @@ async def analyze_funnel(
             Event.event_name == steps[0],
             Event.timestamp >= start,
             Event.timestamp < end,
+            REAL_EVENTS,
         )
         .group_by(Event.session_id)
         .cte(name="step_0")
@@ -127,6 +128,7 @@ async def analyze_funnel(
                 Event.event_name == steps[i],
                 Event.timestamp > prev.c.t_prev,
                 Event.timestamp <= prev.c.t0 + window,
+                REAL_EVENTS,
             )
             .group_by(prev.c.session_id, prev.c.t0)
             .cte(name=f"step_{i}")

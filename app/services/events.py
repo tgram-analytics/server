@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.alert import Alert, AlertCondition
-from app.models.event import Event
+from app.models.event import REAL_EVENTS, Event
 
 
 async def insert_event(
@@ -103,6 +103,7 @@ async def evaluate_alerts(
                     Event.project_id == project_id,
                     Event.event_name == event_name,
                     Event.received_at >= today_start,
+                    REAL_EVENTS,
                 )
             )
             today_count = count_result.scalar_one()
