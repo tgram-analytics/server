@@ -183,5 +183,6 @@ class EventResponse(BaseModel):
     referrer: str | None
     timestamp: datetime
     received_at: datetime
+    is_test: bool = False
 
     model_config = {"from_attributes": True}

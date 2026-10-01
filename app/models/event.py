@@ -67,3 +67,16 @@ class Event(Base):
     browser: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
     os: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
     device_type: Mapped[str | None] = mapped_column(sa.String(64), nullable=True)
+    # Test events (payload ``test: true`` or a localhost origin) are stored
+    # but excluded from analytics. Filter reads with ``REAL_EVENTS``.
+    is_test: Mapped[bool] = mapped_column(
+        sa.Boolean,
+        server_default=sa.false(),
+        default=False,
+        nullable=False,
+    )
+
+
+# Shared WHERE predicate for every analytics read. Debug views that must
+# also show test events mark the query with "# includes test events on purpose".
+REAL_EVENTS = Event.is_test.is_(False)
