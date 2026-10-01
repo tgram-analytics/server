@@ -14,7 +14,7 @@ from telegram.ext import ContextTypes
 from app.bot.auth import requires_user
 from app.bot.rich import reply_rich_html
 from app.models.alert import Alert
-from app.models.event import Event
+from app.models.event import REAL_EVENTS, Event
 from app.models.project import Project
 from app.models.user import User
 from app.services.projects import list_projects
@@ -54,7 +54,7 @@ async def _project_digest(
         await session.execute(
             select(func.count(func.distinct(Event.session_id)))
             .select_from(Event)
-            .where(Event.project_id == project.id, Event.timestamp >= week_ago)
+            .where(Event.project_id == project.id, Event.timestamp >= week_ago, REAL_EVENTS)
         )
     ).scalar_one()
 
@@ -66,6 +66,7 @@ async def _project_digest(
                 Event.project_id == project.id,
                 Event.timestamp >= two_weeks_ago,
                 Event.timestamp < week_ago,
+                REAL_EVENTS,
             )
         )
     ).scalar_one()
@@ -102,6 +103,7 @@ async def _project_digest(
                 Event.project_id == project.id,
                 Event.event_name.in_(alerted_names),
                 Event.timestamp >= two_weeks_ago,
+                REAL_EVENTS,
             )
             .group_by(Event.event_name)
         )
