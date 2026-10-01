@@ -465,8 +465,10 @@ async def test_test_taps_store_nothing(api_client, db_session):
     assert r2.status_code == 202 and r2.json() == {"status": "accepted"}
     await db_session.invalidate()
     rows = (
-        await db_session.execute(select(Tap).where(Tap.project_id == uuid.UUID(data["id"])))
-    ).scalars().all()
+        (await db_session.execute(select(Tap).where(Tap.project_id == uuid.UUID(data["id"]))))
+        .scalars()
+        .all()
+    )
     assert rows == []
 ```
 
@@ -644,12 +646,23 @@ async def test_property_keys_ignore_test_only_keys(db_session, singleton_user):
     project = await _project(db_session, singleton_user.id, "keys-excl.com")
     now = datetime.now(UTC) - timedelta(minutes=5)
     db_session.add(
-        Event(project_id=project.id, event_name="e", session_id="r", properties={"a": 1},
-              timestamp=now)
+        Event(
+            project_id=project.id,
+            event_name="e",
+            session_id="r",
+            properties={"a": 1},
+            timestamp=now,
+        )
     )
     db_session.add(
-        Event(project_id=project.id, event_name="e", session_id="t",
-              properties={"mock_only": ["z"]}, timestamp=now, is_test=True)
+        Event(
+            project_id=project.id,
+            event_name="e",
+            session_id="t",
+            properties={"mock_only": ["z"]},
+            timestamp=now,
+            is_test=True,
+        )
     )
     await db_session.flush()
     start, end = _window()
@@ -664,8 +677,7 @@ async def test_test_events_only_project_has_no_event_names(db_session, singleton
 
     project = await _project(db_session, singleton_user.id, "only-test.com")
     db_session.add(
-        Event(project_id=project.id, event_name="e", session_id="t", properties={},
-              is_test=True)
+        Event(project_id=project.id, event_name="e", session_id="t", properties={}, is_test=True)
     )
     await db_session.flush()
     assert await a.list_event_names(db_session, project_id=project.id) == []
@@ -678,8 +690,9 @@ async def test_aggregation_rollup_excludes_test(db_session, singleton_user):
     project = await _project(db_session, singleton_user.id, "agg-excl.com")
     await _seed_pair(db_session, project.id)
     # Seed at "now" so the current hour bucket includes both rows.
-    for e in (await db_session.execute(select(Event).where(Event.project_id == project.id))
-              ).scalars():
+    for e in (
+        await db_session.execute(select(Event).where(Event.project_id == project.id))
+    ).scalars():
         e.timestamp = datetime.now(UTC) - timedelta(seconds=1)
     await db_session.flush()
 
@@ -701,8 +714,12 @@ async def test_threshold_alert_ignores_test_rows(db_session, singleton_user):
 
     project = await _project(db_session, singleton_user.id, "alert-excl.com")
     db_session.add(
-        Alert(project_id=project.id, event_name="signup",
-              condition=AlertCondition.threshold, threshold_n=2)
+        Alert(
+            project_id=project.id,
+            event_name="signup",
+            condition=AlertCondition.threshold,
+            threshold_n=2,
+        )
     )
     await _seed_pair(db_session, project.id)
     fired = await evaluate_alerts(db_session, project_id=project.id, event_name="signup")
@@ -715,11 +732,26 @@ async def test_funnel_excludes_test(db_session, singleton_user):
     project = await _project(db_session, singleton_user.id, "funnel-excl.com")
     now = datetime.now(UTC) - timedelta(minutes=10)
     for sid, is_test in (("real", False), ("test", True)):
-        db_session.add(Event(project_id=project.id, event_name="view", session_id=sid,
-                             properties={}, timestamp=now, is_test=is_test))
-        db_session.add(Event(project_id=project.id, event_name="buy", session_id=sid,
-                             properties={}, timestamp=now + timedelta(minutes=1),
-                             is_test=is_test))
+        db_session.add(
+            Event(
+                project_id=project.id,
+                event_name="view",
+                session_id=sid,
+                properties={},
+                timestamp=now,
+                is_test=is_test,
+            )
+        )
+        db_session.add(
+            Event(
+                project_id=project.id,
+                event_name="buy",
+                session_id=sid,
+                properties={},
+                timestamp=now + timedelta(minutes=1),
+                is_test=is_test,
+            )
+        )
     funnel = await create_funnel(
         db_session, project_id=project.id, name="f", steps=["view", "buy"], time_window=3600
     )
@@ -830,8 +862,9 @@ async def test_digest_excludes_test(session_factory, singleton_user):
 
     async with session_factory() as session:
         project = await _project(session, singleton_user.id, "digest-excl.com")
-        session.add(Alert(project_id=project.id, event_name="signup",
-                          condition=AlertCondition.every))
+        session.add(
+            Alert(project_id=project.id, event_name="signup", condition=AlertCondition.every)
+        )
         await _seed_pair(session, project.id)
         await session.commit()
         d = await _project_digest(session, project, datetime.now(UTC))
@@ -969,24 +1002,24 @@ Expected: FAIL (`KeyError: 'is_test'`, missing `🧪`, missing `test_count`).
 In `app/services/analytics.py`, replace the body of `list_recent_events`:
 
 ```python
-    """Return the most recent *limit* events for a project, newest first.
+"""Return the most recent *limit* events for a project, newest first.
 
-    Includes test events: this feeds debug views (recent activity,
-    ``recent_events``, ``verify_integration``).
+Includes test events: this feeds debug views (recent activity,
+``recent_events``, ``verify_integration``).
 
-    Returns ``[{"event_name": str, "timestamp": datetime, "is_test": bool}, ...]``.
-    """
-    # includes test events on purpose
-    result = await session.execute(
-        select(Event.event_name, Event.received_at, Event.is_test)
-        .where(Event.project_id == project_id)
-        .order_by(Event.received_at.desc())
-        .limit(limit)
-    )
-    return [
-        {"event_name": r.event_name, "timestamp": r.received_at, "is_test": r.is_test}
-        for r in result
-    ]
+Returns ``[{"event_name": str, "timestamp": datetime, "is_test": bool}, ...]``.
+"""
+
+# includes test events on purpose
+result = await session.execute(
+    select(Event.event_name, Event.received_at, Event.is_test)
+    .where(Event.project_id == project_id)
+    .order_by(Event.received_at.desc())
+    .limit(limit)
+)
+return [
+    {"event_name": r.event_name, "timestamp": r.received_at, "is_test": r.is_test} for r in result
+]
 ```
 
 - [ ] **Step 4: Mark test rows in the bot recent activity**
@@ -1053,9 +1086,7 @@ In `app/bot/handlers/doctor.py`, replace the per-project query with:
 Then append `{test_note}` to the two event lines that print a total:
 
 ```python
-            lines.append(
-                f"  ⚠️ Events: {total:,}{test_note} (last {_relative(now, last_seen)} — stale)"
-            )
+lines.append(f"  ⚠️ Events: {total:,}{test_note} (last {_relative(now, last_seen)} — stale)")
 ```
 
 ```python
