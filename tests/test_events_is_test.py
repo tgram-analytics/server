@@ -309,17 +309,26 @@ async def test_test_events_only_project_has_no_event_names(singleton_user, db_se
     assert await a.list_event_names(db_session, project_id=project.id) == []
 
 
-async def test_aggregation_rollup_excludes_test(singleton_user, db_session):
+async def test_aggregation_rollup_excludes_test(singleton_user, db_session, monkeypatch):
     from app.models.aggregation import Aggregation, AggregationPeriod
     from app.services.aggregation import run_aggregation_cron
 
+    # Freeze the clock the service reads so the day bucket is stable at any hour.
+    fixed = datetime.now(UTC).replace(hour=12, minute=0, second=0, microsecond=0)
+
+    class _Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    monkeypatch.setattr("app.services.aggregation.datetime", _Frozen)
+
     project = await _project(db_session, singleton_user.id, "agg-excl.com")
     await _seed_pair(db_session, project.id)
-    # Seed at "now" so the current hour bucket includes both rows.
     for e in (
         await db_session.execute(select(Event).where(Event.project_id == project.id))
     ).scalars():
-        e.timestamp = datetime.now(UTC) - timedelta(seconds=1)
+        e.timestamp = fixed - timedelta(minutes=1)
     await db_session.flush()
 
     await run_aggregation_cron(db_session)
@@ -357,7 +366,11 @@ async def test_funnel_excludes_test(singleton_user, db_session):
 
     project = await _project(db_session, singleton_user.id, "funnel-excl.com")
     now = datetime.now(UTC) - timedelta(minutes=10)
-    for sid, is_test in (("real", False), ("test", True)):
+    for sid, view_test, buy_test in (
+        ("real", False, False),
+        ("test", True, True),
+        ("mixed", False, True),
+    ):
         db_session.add(
             Event(
                 project_id=project.id,
@@ -365,7 +378,7 @@ async def test_funnel_excludes_test(singleton_user, db_session):
                 session_id=sid,
                 properties={},
                 timestamp=now,
-                is_test=is_test,
+                is_test=view_test,
             )
         )
         db_session.add(
@@ -375,7 +388,7 @@ async def test_funnel_excludes_test(singleton_user, db_session):
                 session_id=sid,
                 properties={},
                 timestamp=now + timedelta(minutes=1),
-                is_test=is_test,
+                is_test=buy_test,
             )
         )
     funnel = await create_funnel(
@@ -383,4 +396,4 @@ async def test_funnel_excludes_test(singleton_user, db_session):
     )
     start, end = _window()
     result = await analyze_funnel(db_session, funnel=funnel, start=start, end=end)
-    assert [r["count"] for r in result] == [1, 1]
+    assert [r["count"] for r in result] == [2, 1]
