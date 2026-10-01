@@ -154,6 +154,7 @@ def register_setup_tools(mcp: FastMCP) -> None:
             except ProjectNotOwnedError:
                 return _not_owned_error(project_id)
 
+            # includes test events on purpose
             rows = await list_recent_events(session, project_id=pid, limit=1000)
 
         in_window = [r for r in rows if r["timestamp"] is not None and r["timestamp"] >= start]
@@ -162,7 +163,7 @@ def register_setup_tools(mcp: FastMCP) -> None:
             count=count,
             since_minutes=since_minutes,
             is_receiving=count > 0,
-            test_count=sum(1 for r in in_window if r.get("is_test", False)),
+            test_count=sum(1 for r in in_window if r["is_test"]),
         )
 
     @mcp.tool(title="Get integration guide", annotations=_READ_ONLY_OPEN_WORLD)

@@ -529,8 +529,8 @@ async def test_recent_events_happy_path(
     )
     ts = datetime(2026, 5, 8, tzinfo=UTC)
     rows = [
-        {"event_name": "pageview", "timestamp": ts},
-        {"event_name": "signup", "timestamp": ts},
+        {"event_name": "pageview", "timestamp": ts, "is_test": False},
+        {"event_name": "signup", "timestamp": ts, "is_test": False},
     ]
     monkeypatch.setattr(
         "app.services.analytics.list_recent_events",
@@ -569,9 +569,9 @@ async def test_recent_events_filters_by_event_name(
     )
     ts = datetime(2026, 5, 8, tzinfo=UTC)
     rows = [
-        {"event_name": "pageview", "timestamp": ts},
-        {"event_name": "signup", "timestamp": ts},
-        {"event_name": "pageview", "timestamp": ts},
+        {"event_name": "pageview", "timestamp": ts, "is_test": False},
+        {"event_name": "signup", "timestamp": ts, "is_test": False},
+        {"event_name": "pageview", "timestamp": ts, "is_test": False},
     ]
     monkeypatch.setattr(
         "app.services.analytics.list_recent_events",
