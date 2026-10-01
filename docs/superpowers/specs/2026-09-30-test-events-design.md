@@ -1,7 +1,7 @@
 # Test events — design
 
 Date: 2026-09-30
-Status: draft, awaiting review
+Status: implemented
 
 ## Goal
 

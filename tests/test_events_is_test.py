@@ -527,3 +527,38 @@ async def test_doctor_reports_test_count(session_factory, singleton_user):
     text = update.message.reply_text.call_args[0][0]
     assert "Events: 2" in text
     assert "🧪 1 test" in text
+
+
+async def test_retention_deletes_old_test_events(singleton_user, db_session):
+    from app.services.aggregation import run_retention_cron
+
+    project = await _project(db_session, singleton_user.id, "retention-test.com")
+    old = datetime.now(UTC) - timedelta(days=200)
+    db_session.add(
+        Event(
+            project_id=project.id,
+            event_name="e",
+            session_id="old-test",
+            properties={},
+            received_at=old,
+            is_test=True,
+        )
+    )
+    db_session.add(
+        Event(
+            project_id=project.id,
+            event_name="e",
+            session_id="new-test",
+            properties={},
+            is_test=True,
+        )
+    )
+    await db_session.flush()
+
+    await run_retention_cron(db_session)
+    rows = (
+        (await db_session.execute(select(Event.session_id).where(Event.project_id == project.id)))
+        .scalars()
+        .all()
+    )
+    assert rows == ["new-test"]

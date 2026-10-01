@@ -126,7 +126,7 @@ MCP analytics tools ignore them. Recent activity, `/doctor`, and the MCP
 `recent_events` and `verify_integration` tools still show them, marked 🧪, so
 you can check an integration. Test taps are not stored.
 
-Events sent from `localhost`, `*.localhost`, `127.0.0.1`, `::1` or `0.0.0.0`
+Events sent from `localhost`, `*.localhost`, `127.0.0.0/8`, `::1` or `0.0.0.0`
 (by `Origin` header or pageview URL) are marked as test automatically. If a
 project has an origin allowlist, localhost requests are still rejected unless
 the allowlist includes them.
