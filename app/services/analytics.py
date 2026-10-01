@@ -12,7 +12,7 @@ from typing import Any
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.event import Event
+from app.models.event import REAL_EVENTS, Event
 
 
 def _zero_fill(
@@ -79,6 +79,7 @@ async def count_events(
             Event.event_name == event_name,
             Event.timestamp >= start,
             Event.timestamp < end,
+            REAL_EVENTS,
         )
     )
     return result.scalar_one()
@@ -109,6 +110,7 @@ async def events_over_time(
             Event.event_name == event_name,
             Event.timestamp >= start,
             Event.timestamp < end,
+            REAL_EVENTS,
         )
         .group_by(bucket_col)
         .order_by(bucket_col)
@@ -144,6 +146,7 @@ async def top_properties(
             Event.timestamp >= start,
             Event.timestamp < end,
             Event.properties[property_key].astext.isnot(None),
+            REAL_EVENTS,
         )
         .group_by(value_col)
         .order_by(func.count().desc())
@@ -186,6 +189,7 @@ async def top_array_elements(
         FROM events,
              jsonb_array_elements_text(properties -> :key) AS elem
         WHERE project_id = :pid
+          AND NOT is_test
           AND event_name = :ename
           AND timestamp >= :start
           AND timestamp < :end
@@ -230,6 +234,7 @@ async def find_array_property_keys(
         FROM events,
              jsonb_each(properties) AS kv
         WHERE project_id = :pid
+          AND NOT is_test
           AND event_name = :ename
           AND timestamp >= :start
           AND timestamp < :end
@@ -260,7 +265,7 @@ async def list_event_names(
             func.count().label("count"),
             func.max(Event.timestamp).label("last_seen"),
         )
-        .where(Event.project_id == project_id)
+        .where(Event.project_id == project_id, REAL_EVENTS)
         .group_by(Event.event_name)
         .order_by(func.count().desc())
     )
@@ -312,6 +317,7 @@ async def list_property_keys(
             Event.event_name == event_name,
             Event.timestamp >= start,
             Event.timestamp < end,
+            REAL_EVENTS,
         )
         .subquery()
     )
