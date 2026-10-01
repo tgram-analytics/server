@@ -26,6 +26,7 @@ async def insert_event(
     browser: str | None = None,
     os: str | None = None,
     device_type: str | None = None,
+    is_test: bool = False,
 ) -> Event:
     """Insert an event row.
 
@@ -47,6 +48,7 @@ async def insert_event(
         browser=browser,
         os=os,
         device_type=device_type,
+        is_test=is_test,
     )
     if timestamp is not None:
         event.timestamp = timestamp
