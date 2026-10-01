@@ -119,8 +119,10 @@ def register_setup_tools(mcp: FastMCP) -> None:
         confirm that events are flowing. Counts ALL event names — we
         don't filter by name here because new integrations don't
         necessarily fire the same name as their first ping.
+        Counts test events too; ``test_count`` says how many.
 
-        Response: ``{"count": int, "since_minutes": int, "is_receiving": bool}``.
+        Response: ``{"count": int, "since_minutes": int, "is_receiving": bool,
+        "test_count": int}``.
         """
         token = get_access_token()
         if token is None or not isinstance(token, MCPAccessToken):
@@ -160,6 +162,7 @@ def register_setup_tools(mcp: FastMCP) -> None:
             count=count,
             since_minutes=since_minutes,
             is_receiving=count > 0,
+            test_count=sum(1 for r in in_window if r.get("is_test", False)),
         )
 
     @mcp.tool(title="Get integration guide", annotations=_READ_ONLY_OPEN_WORLD)

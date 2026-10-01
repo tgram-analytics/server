@@ -166,6 +166,45 @@ async def test_verify_integration_cross_user_403(
     rec_mock.assert_not_awaited()
 
 
+async def test_verify_integration_counts_test_events(
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    monkeypatch,
+    patch_open_session,
+    user_a_id,
+    project_a_id,
+):
+    project = _project_obj(project_a_id, owner=user_a_id)
+    monkeypatch.setattr(
+        "app.services.projects.get_project",
+        AsyncMock(return_value=project),
+    )
+    now = datetime.now(UTC)
+    rows = [
+        {"event_name": "signup", "timestamp": now - timedelta(minutes=5), "is_test": True},
+        {"event_name": "signup", "timestamp": now - timedelta(minutes=5), "is_test": False},
+    ]
+    monkeypatch.setattr(
+        "app.services.analytics.list_recent_events",
+        AsyncMock(return_value=rows),
+    )
+
+    from tests.mcp.conftest import _make_token
+
+    with set_auth_token(_make_token(user_a_id)):
+        result = await call_tool(
+            fresh_mcp,
+            "verify_integration",
+            project_id=str(project_a_id),
+            since_minutes=30,
+        )
+
+    assert isinstance(result, dict)
+    assert result["count"] == 2
+    assert result["test_count"] == 1
+
+
 # ── get_integration_guide (Phase 6) ─────────────────────────────────────────
 
 

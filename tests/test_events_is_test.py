@@ -446,3 +446,53 @@ async def test_export_excludes_test(singleton_user, db_session):
     data, count = await _build_csv(db_session, project.id)
     assert count == 1
     assert b"s-test" not in data
+
+
+# ── Debug views include test events ───────────────────────────────────────────
+
+
+async def test_list_recent_events_includes_test_with_flag(singleton_user, db_session):
+    from app.services.analytics import list_recent_events
+
+    project = await _project(db_session, singleton_user.id, "recent-incl.com")
+    await _seed_pair(db_session, project.id)
+    rows = await list_recent_events(db_session, project_id=project.id)
+    assert sorted(r["is_test"] for r in rows) == [False, True]
+
+
+def test_history_groups_split_on_is_test():
+    from app.bot.handlers.events import _group_consecutive
+
+    now = datetime.now(UTC)
+    groups = _group_consecutive(
+        [
+            {"event_name": "signup", "timestamp": now, "is_test": True},
+            {"event_name": "signup", "timestamp": now, "is_test": True},
+            {"event_name": "signup", "timestamp": now, "is_test": False},
+        ]
+    )
+    assert [(g["event_name"], g["count"], g["is_test"]) for g in groups] == [
+        ("signup", 2, True),
+        ("signup", 1, False),
+    ]
+
+
+async def test_doctor_reports_test_count(session_factory, singleton_user):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.bot.handlers.doctor import doctor_command
+
+    async with session_factory() as session:
+        project = await _project(session, singleton_user.id, "doctor-test.com")
+        await _seed_pair(session, project.id)
+        await session.commit()
+
+    update = MagicMock()
+    update.effective_chat.id = ADMIN_ID
+    update.effective_user.id = ADMIN_ID
+    update.message.reply_text = AsyncMock()
+    update.callback_query = None
+    await doctor_command(update, MagicMock())
+    text = update.message.reply_text.call_args[0][0]
+    assert "Events: 2" in text
+    assert "🧪 1 test" in text
