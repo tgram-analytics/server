@@ -25,7 +25,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.ext import ContextTypes
 
 from app.bot.auth import requires_user
-from app.models.event import Event
+from app.models.event import REAL_EVENTS, Event
 from app.models.user import User
 from app.services.projects import get_project
 
@@ -57,7 +57,7 @@ def _isoformat(ts: datetime | None) -> str:
 async def _build_csv(session: AsyncSession, project_id: uuid.UUID) -> tuple[bytes, int]:
     """Serialise all events of a project to CSV bytes; returns (data, row count)."""
     result = await session.stream(
-        select(Event).where(Event.project_id == project_id).order_by(Event.timestamp)
+        select(Event).where(Event.project_id == project_id, REAL_EVENTS).order_by(Event.timestamp)
     )
 
     buf = io.StringIO()

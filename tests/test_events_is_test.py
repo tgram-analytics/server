@@ -397,3 +397,52 @@ async def test_funnel_excludes_test(singleton_user, db_session):
     start, end = _window()
     result = await analyze_funnel(db_session, funnel=funnel, start=start, end=end)
     assert [r["count"] for r in result] == [2, 1]
+
+
+# ── Bot reports, digest, export ───────────────────────────────────────────────
+
+
+async def test_reports_menu_excludes_test(session_factory, singleton_user):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.bot.handlers.reports import show_reports_menu
+
+    async with session_factory() as session:
+        project = await _project(session, singleton_user.id, "reports-excl.com")
+        await _seed_pair(session, project.id)
+        await session.commit()
+        pid = str(project.id)
+
+    query = MagicMock()
+    query.edit_message_text = AsyncMock()
+    await show_reports_menu(query, pid, singleton_user.id)
+    text = query.edit_message_text.call_args[0][0]
+    assert "Total events: <b>1</b>" in text
+    assert "Unique sessions: <b>1</b>" in text
+
+
+async def test_digest_excludes_test(session_factory, singleton_user):
+    from app.bot.handlers.digest import _project_digest
+    from app.models.alert import Alert, AlertCondition
+
+    async with session_factory() as session:
+        project = await _project(session, singleton_user.id, "digest-excl.com")
+        session.add(
+            Alert(project_id=project.id, event_name="signup", condition=AlertCondition.every)
+        )
+        await _seed_pair(session, project.id)
+        await session.commit()
+        d = await _project_digest(session, project, datetime.now(UTC))
+
+    assert d.sessions_curr == 1
+    assert [(r[0], r[1]) for r in d.events] == [("signup", 1)]
+
+
+async def test_export_excludes_test(singleton_user, db_session):
+    from app.bot.handlers.export import _build_csv
+
+    project = await _project(db_session, singleton_user.id, "export-excl.com")
+    await _seed_pair(db_session, project.id)
+    data, count = await _build_csv(db_session, project.id)
+    assert count == 1
+    assert b"s-test" not in data

@@ -23,7 +23,7 @@ from telegram import (
 
 from app.bot.constants import PERIOD_LABEL, PERIODS
 from app.core.database import get_session_factory
-from app.models.event import Event
+from app.models.event import REAL_EVENTS, Event
 from app.services.analytics import compare_periods, events_over_time
 from app.services.charts import ChartGenerationError, generate_comparison_chart, generate_line_chart
 from app.services.projects import get_project
@@ -97,7 +97,7 @@ async def _get_top_event_data(
     if not data:
         top_result = await session.execute(
             select(Event.event_name, func.count().label("cnt"))
-            .where(Event.project_id == project_id, Event.timestamp >= start)
+            .where(Event.project_id == project_id, Event.timestamp >= start, REAL_EVENTS)
             .group_by(Event.event_name)
             .order_by(func.count().desc())
             .limit(1)
@@ -138,20 +138,20 @@ async def show_reports_menu(
         total_result = await session.execute(
             select(func.count())
             .select_from(Event)
-            .where(Event.project_id == pid, Event.timestamp >= seven_days_ago)
+            .where(Event.project_id == pid, Event.timestamp >= seven_days_ago, REAL_EVENTS)
         )
         total = total_result.scalar_one()
 
         sessions_result = await session.execute(
             select(func.count(func.distinct(Event.session_id)))
             .select_from(Event)
-            .where(Event.project_id == pid, Event.timestamp >= seven_days_ago)
+            .where(Event.project_id == pid, Event.timestamp >= seven_days_ago, REAL_EVENTS)
         )
         unique_sessions = sessions_result.scalar_one()
 
         top_result = await session.execute(
             select(Event.event_name, func.count().label("cnt"))
-            .where(Event.project_id == pid, Event.timestamp >= seven_days_ago)
+            .where(Event.project_id == pid, Event.timestamp >= seven_days_ago, REAL_EVENTS)
             .group_by(Event.event_name)
             .order_by(func.count().desc())
             .limit(5)
