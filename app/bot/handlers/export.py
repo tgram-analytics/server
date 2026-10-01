@@ -1,8 +1,8 @@
 """Export action: dump a project's raw event data as a CSV document.
 
 Reached via the "📦 Export CSV" button on the project menu (callback
-``exp:<project_id>``). Every row of the ``events`` table for the project
-is streamed into an in-memory CSV and sent back as a Telegram document.
+``exp:<project_id>``). Every non-test row of the ``events`` table for the
+project is streamed into an in-memory CSV and sent back as a Telegram document.
 Properties are serialised as a JSON string column so nothing is lost.
 
 Exports are built in memory — fine for self-host scale, but Telegram caps
@@ -55,7 +55,10 @@ def _isoformat(ts: datetime | None) -> str:
 
 
 async def _build_csv(session: AsyncSession, project_id: uuid.UUID) -> tuple[bytes, int]:
-    """Serialise all events of a project to CSV bytes; returns (data, row count)."""
+    """Serialise all real (non-test) events of a project to CSV bytes.
+
+    Returns (data, row count).
+    """
     result = await session.stream(
         select(Event).where(Event.project_id == project_id, REAL_EVENTS).order_by(Event.timestamp)
     )

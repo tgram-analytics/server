@@ -421,6 +421,36 @@ async def test_reports_menu_excludes_test(session_factory, singleton_user):
     assert "Unique sessions: <b>1</b>" in text
 
 
+async def test_reports_top_event_fallback_excludes_test(singleton_user, db_session):
+    from app.bot.handlers.reports import _get_top_event_data
+
+    project = await _project(db_session, singleton_user.id, "reports-top-excl.com")
+    ts = datetime.now(UTC) - timedelta(minutes=5)
+    db_session.add(
+        Event(
+            project_id=project.id, event_name="signup", session_id="r1", properties={}, timestamp=ts
+        )
+    )
+    for i in range(2):
+        db_session.add(
+            Event(
+                project_id=project.id,
+                event_name="click",
+                session_id=f"t{i}",
+                properties={},
+                timestamp=ts,
+                is_test=True,
+            )
+        )
+    await db_session.flush()
+
+    data, event_name = await _get_top_event_data(
+        db_session, project.id, "7d", "day", datetime.now(UTC)
+    )
+    assert event_name == "signup"
+    assert sum(r["count"] for r in data) == 1
+
+
 async def test_digest_excludes_test(session_factory, singleton_user):
     from app.bot.handlers.digest import _project_digest
     from app.models.alert import Alert, AlertCondition
@@ -445,6 +475,7 @@ async def test_export_excludes_test(singleton_user, db_session):
     await _seed_pair(db_session, project.id)
     data, count = await _build_csv(db_session, project.id)
     assert count == 1
+    assert b"s-real" in data
     assert b"s-test" not in data
 
 
