@@ -1,8 +1,10 @@
 """Event insertion and alert evaluation service."""
 
+import ipaddress
 import uuid
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 import sqlalchemy as sa
 from sqlalchemy import func, select
@@ -198,3 +200,31 @@ def is_origin_allowed(domain_allowlist: list[str], origin: str | None) -> bool:
         if host == normalized:
             return True
     return False
+
+
+_LOCAL_HOSTNAMES = frozenset({"localhost", "0.0.0.0"})
+
+
+def is_local_host(value: str | None) -> bool:
+    """True when *value* (an Origin header or a page URL) points at a local
+    development host: ``localhost``, ``*.localhost``, ``127.0.0.0/8``,
+    ``::1`` or ``0.0.0.0``.
+
+    Events from such hosts are stored as test events. Values without a host
+    (``None``, ``"null"``, a bare path) are not local.
+    """
+    if not value:
+        return False
+    try:
+        host = urlsplit(value if "//" in value else f"//{value}").hostname
+    except ValueError:
+        return False
+    if not host:
+        return False
+    host = host.lower().rstrip(".")
+    if host in _LOCAL_HOSTNAMES or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
