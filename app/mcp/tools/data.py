@@ -444,6 +444,7 @@ def register_data_tools(mcp: FastMCP) -> None:
             except ProjectNotOwnedError:
                 return _not_owned_error(project_id)
 
+            # includes test events on purpose
             rows = await list_recent_events(
                 session,
                 project_id=pid,
@@ -459,7 +460,7 @@ def register_data_tools(mcp: FastMCP) -> None:
             RecentEventRow(
                 event_name=r["event_name"],
                 timestamp=r["timestamp"].isoformat() if r["timestamp"] else None,
-                is_test=r.get("is_test", False),
+                is_test=r["is_test"],
             )
             for r in rows
         ]
