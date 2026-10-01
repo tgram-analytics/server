@@ -619,6 +619,45 @@ async def test_recent_events_cross_user_403(
     rec_mock.assert_not_awaited()
 
 
+async def test_recent_events_includes_test_events(
+    fresh_mcp,
+    call_tool,
+    set_auth_token,
+    monkeypatch,
+    patch_open_session,
+    user_a_id,
+    project_a_id,
+):
+    project = _project_obj(project_a_id, owner=user_a_id)
+    monkeypatch.setattr(
+        "app.services.projects.get_project",
+        AsyncMock(return_value=project),
+    )
+    ts = datetime(2026, 5, 8, tzinfo=UTC)
+    rows = [
+        {"event_name": "signup", "timestamp": ts, "is_test": True},
+        {"event_name": "signup", "timestamp": ts, "is_test": False},
+    ]
+    monkeypatch.setattr(
+        "app.services.analytics.list_recent_events",
+        AsyncMock(return_value=rows),
+    )
+
+    from tests.mcp.conftest import _make_token
+
+    with set_auth_token(_make_token(user_a_id)):
+        result = await call_tool(
+            fresh_mcp,
+            "recent_events",
+            project_id=str(project_a_id),
+            limit=10,
+        )
+
+    assert isinstance(result, dict)
+    assert len(result["events"]) == 2
+    assert [e["is_test"] for e in result["events"]].count(True) == 1
+
+
 # ── top_taps ────────────────────────────────────────────────────────────────
 
 

@@ -133,6 +133,7 @@ class RecentEventRow(BaseModel):
 
     event_name: str
     timestamp: str | None = None
+    is_test: bool = Field(False, description="True for test events (excluded from analytics).")
 
 
 class RecentEventsResult(BaseModel):
@@ -212,6 +213,7 @@ class VerifyIntegrationResult(BaseModel):
     count: int
     since_minutes: int
     is_receiving: bool
+    test_count: int = Field(0, description="How many of ``count`` are test events.")
 
 
 class IntegrationGuideResult(BaseModel):

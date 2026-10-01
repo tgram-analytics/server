@@ -282,15 +282,22 @@ async def list_recent_events(
 ) -> list[dict[str, Any]]:
     """Return the most recent *limit* events for a project, newest first.
 
-    Returns ``[{"event_name": str, "timestamp": datetime}, ...]``.
+    Includes test events: this feeds debug views (recent activity,
+    ``recent_events``, ``verify_integration``).
+
+    Returns ``[{"event_name": str, "timestamp": datetime, "is_test": bool}, ...]``.
     """
+    # includes test events on purpose
     result = await session.execute(
-        select(Event.event_name, Event.received_at)
+        select(Event.event_name, Event.received_at, Event.is_test)
         .where(Event.project_id == project_id)
         .order_by(Event.received_at.desc())
         .limit(limit)
     )
-    return [{"event_name": r.event_name, "timestamp": r.received_at} for r in result]
+    return [
+        {"event_name": r.event_name, "timestamp": r.received_at, "is_test": r.is_test}
+        for r in result
+    ]
 
 
 async def list_property_keys(

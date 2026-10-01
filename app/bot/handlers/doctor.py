@@ -67,15 +67,19 @@ async def doctor_command(
     issues = 0
 
     for project in projects:
+        # includes test events on purpose
         result = await session.execute(
             select(
                 func.count().label("total"),
+                func.count().filter(Event.is_test).label("test"),
                 func.max(Event.received_at).label("last_seen"),
             ).where(Event.project_id == project.id)
         )
         row = result.one()
         total: int = int(row.total or 0)
+        test_total: int = int(row.test or 0)
         last_seen: datetime | None = row.last_seen
+        test_note = f" · 🧪 {test_total:,} test" if test_total else ""
 
         lines = [f"📊 <b>{html.escape(project.name)}</b>"]
         project_issues = 0
@@ -84,10 +88,12 @@ async def doctor_command(
             lines.append("  ❌ No events received yet")
             project_issues += 1
         elif last_seen is None or (now - last_seen) > _STALE_THRESHOLD:
-            lines.append(f"  ⚠️ Events: {total:,} (last {_relative(now, last_seen)} — stale)")
+            lines.append(
+                f"  ⚠️ Events: {total:,}{test_note} (last {_relative(now, last_seen)} — stale)"
+            )
             project_issues += 1
         else:
-            lines.append(f"  ✅ Events: {total:,} (last {_relative(now, last_seen)})")
+            lines.append(f"  ✅ Events: {total:,}{test_note} (last {_relative(now, last_seen)})")
 
         allowlist = project.domain_allowlist or []
         if not allowlist:

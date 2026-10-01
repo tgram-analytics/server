@@ -169,7 +169,8 @@ def register_project_tools(mcp: FastMCP) -> None:
         """Return distinct event names for a project, sorted by count desc.
 
         Each entry is an :class:`EventNameRow` with ``event_name``,
-        ``count``, ``last_seen`` (ISO-8601 or ``None``).
+        ``count``, ``last_seen`` (ISO-8601 or ``None``). Test events are
+        excluded.
         """
         token = get_access_token()
         if token is None or not isinstance(token, MCPAccessToken):

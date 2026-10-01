@@ -260,6 +260,7 @@ class _HistoryGroup(TypedDict):
     event_name: str
     count: int
     latest: datetime
+    is_test: bool
 
 
 def _group_consecutive(events: list[dict[str, Any]]) -> list[_HistoryGroup]:
@@ -271,10 +272,11 @@ def _group_consecutive(events: list[dict[str, Any]]) -> list[_HistoryGroup]:
     for evt in events:
         name: str = evt["event_name"]
         ts: datetime = evt["timestamp"]
-        if grouped and grouped[-1]["event_name"] == name:
+        is_test: bool = bool(evt.get("is_test", False))
+        if grouped and grouped[-1]["event_name"] == name and grouped[-1]["is_test"] == is_test:
             grouped[-1]["count"] += 1
         else:
-            grouped.append({"event_name": name, "count": 1, "latest": ts})
+            grouped.append({"event_name": name, "count": 1, "latest": ts, "is_test": is_test})
     return grouped
 
 
@@ -322,7 +324,8 @@ async def show_history_menu(
         count = g["count"]
         rel = _format_relative(now, g["latest"])
         prefix = f"<b>({count})</b> " if count > 1 else ""
-        lines.append(f"{prefix}{name}  <i>· {rel}</i>")
+        mark = "🧪 " if g["is_test"] else ""
+        lines.append(f"{mark}{prefix}{name}  <i>· {rel}</i>")
 
     await query.edit_message_text(
         "\n".join(lines),

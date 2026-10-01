@@ -108,6 +108,8 @@ def register_data_tools(mcp: FastMCP) -> None:
     ) -> list[TextContent] | QueryEventsResult:
         """Return event counts bucketed by *granularity* over *period*.
 
+        Test events are excluded.
+
         Response: ``{"total": int, "series": [{"bucket": iso, "count": int}, ...]}``.
         """
         token = get_access_token()
@@ -177,6 +179,8 @@ def register_data_tools(mcp: FastMCP) -> None:
     ) -> list[TextContent] | ComparePeriodsResult:
         """Compare current-period count to the immediately-prior window.
 
+        Test events are excluded.
+
         Response: ``{"current": int, "previous": int, "delta_pct": float | None}``.
         ``delta_pct`` is ``None`` when ``previous`` is zero.
         """
@@ -229,6 +233,8 @@ def register_data_tools(mcp: FastMCP) -> None:
         limit: int = 10,
     ) -> list[TextContent] | TopPagesResult:
         """Return the top URLs from ``pageview`` events in *period*.
+
+        Test events are excluded.
 
         Response: ``{"pages": [{"value": url, "count": int}, ...]}``.
         """
@@ -287,7 +293,8 @@ def register_data_tools(mcp: FastMCP) -> None:
         The generalisation of ``top_pages`` to any event + property: e.g.
         the top ``reason`` values for ``abandon_reason`` events, or the top
         ``plan`` values for ``checkout_started``. Only events that carry the
-        key are counted. Results are sorted by count desc.
+        key are counted. Results are sorted by count desc. Test events are
+        excluded.
 
         Response: ``{"event_name", "property_key",
         "values": [{"value": str, "count": int}, ...], "period"}``.
@@ -351,6 +358,7 @@ def register_data_tools(mcp: FastMCP) -> None:
         Use this to discover what's available before calling
         ``top_property_values``. Keys are ordered by frequency (most common
         first) and only include keys seen at least once in the window.
+        Test events are excluded.
 
         Response: ``{"event_name", "keys": [str, ...], "period"}``.
         """
@@ -405,7 +413,10 @@ def register_data_tools(mcp: FastMCP) -> None:
         a populated project that filter is good enough at the v1 surface;
         a dedicated server-side filter can come in v2 if needed.
 
-        Response: ``{"events": [{"event_name": str, "timestamp": iso}, ...]}``.
+        Includes test events (``is_test: true``). Test events are stored but
+        every analytics tool ignores them.
+
+        Response: ``{"events": [{"event_name": str, "timestamp": iso, "is_test": bool}, ...]}``.
         """
         token = get_access_token()
         if token is None or not isinstance(token, MCPAccessToken):
@@ -448,6 +459,7 @@ def register_data_tools(mcp: FastMCP) -> None:
             RecentEventRow(
                 event_name=r["event_name"],
                 timestamp=r["timestamp"].isoformat() if r["timestamp"] else None,
+                is_test=r.get("is_test", False),
             )
             for r in rows
         ]
