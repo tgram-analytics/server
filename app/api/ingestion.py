@@ -27,7 +27,7 @@ from app.core.privacy import hash_visitor, parse_user_agent, scrub_properties
 from app.core.security import validate_api_key
 from app.core.telegram_ids import is_unreachable_chat_id
 from app.schemas.event import PageviewRequest, TapsRequest, TrackEventRequest
-from app.services.events import evaluate_alerts, insert_event, is_origin_allowed
+from app.services.events import evaluate_alerts, insert_event, is_local_host, is_origin_allowed
 from app.services.taps import insert_taps
 
 router = APIRouter(prefix="/api/v1", tags=["ingestion"])
@@ -352,6 +352,7 @@ async def track(
     visitor_hash = await hash_visitor(project.id, client_ip, ua)
 
     scrubbed, _dropped, _oversized = scrub_properties(body.properties, project_id=project.id)
+    is_test = body.test or is_local_host(origin)
 
     await insert_event(
         session,
@@ -364,13 +365,15 @@ async def track(
         browser=browser,
         os=os_name,
         device_type=device_type,
+        is_test=is_test,
     )
     await session.commit()
 
     # Privacy: alert notifications render property keys/values into Telegram
     # messages, so they must see the same scrubbed dict that is persisted —
-    # never the raw request properties.
-    background_tasks.add_task(_run_alert_evaluation, project.id, body.event_name, scrubbed)
+    # never the raw request properties. Test events never fire alerts.
+    if not is_test:
+        background_tasks.add_task(_run_alert_evaluation, project.id, body.event_name, scrubbed)
     return {"status": "accepted"}
 
 
@@ -408,6 +411,7 @@ async def pageview(
         properties["referrer"] = body.referrer
 
     scrubbed, _dropped, _oversized = scrub_properties(properties, project_id=project.id)
+    is_test = body.test or is_local_host(origin) or is_local_host(body.url)
 
     await insert_event(
         session,
@@ -422,11 +426,13 @@ async def pageview(
         browser=browser,
         os=os_name,
         device_type=device_type,
+        is_test=is_test,
     )
     await session.commit()
 
     # Privacy: same as /track — alerts must only ever see scrubbed properties.
-    background_tasks.add_task(_run_alert_evaluation, project.id, "pageview", scrubbed)
+    if not is_test:
+        background_tasks.add_task(_run_alert_evaluation, project.id, "pageview", scrubbed)
     return {"status": "accepted"}
 
 
@@ -451,8 +457,9 @@ async def taps(
 
     ua = request.headers.get("user-agent", "")
     _browser, _os_name, device_type = parse_user_agent(ua)
-    if device_type == "bot":
-        # Same as /track: crawlers are not visitors.
+    if device_type == "bot" or body.test or is_local_host(origin):
+        # Crawlers are not visitors, and taps have no debug view, so test
+        # and localhost taps are not stored either.
         return {"status": "accepted"}
 
     await insert_taps(

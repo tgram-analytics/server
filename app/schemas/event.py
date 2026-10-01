@@ -107,6 +107,8 @@ class TrackEventRequest(BaseModel):
     session_id: str = Field(..., min_length=1, max_length=512)
     properties: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime | None = None
+    # Mark as test data: stored, excluded from analytics.
+    test: bool = False
 
     _validate_timestamp = field_validator("timestamp")(_validate_timestamp)
     _validate_properties = field_validator("properties")(_validate_properties)
@@ -119,6 +121,8 @@ class PageviewRequest(BaseModel):
     referrer: str | None = Field(default=None, max_length=2048)
     timestamp: datetime | None = None
     properties: dict[str, Any] = Field(default_factory=dict)
+    # Mark as test data: stored, excluded from analytics.
+    test: bool = False
 
     _validate_timestamp = field_validator("timestamp")(_validate_timestamp)
     _validate_properties = field_validator("properties")(_validate_properties)
@@ -165,6 +169,8 @@ class TapsRequest(BaseModel):
     vw: int = Field(..., ge=0, le=10_000)
     taps: list[TapPoint] = Field(default_factory=list, max_length=MAX_TAPS_PER_REQUEST)
     scroll: float | None = Field(default=None, ge=0, le=1)
+    # Mark as test data: stored, excluded from analytics.
+    test: bool = False
 
     @model_validator(mode="after")
     def _not_empty(self) -> Self:
