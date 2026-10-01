@@ -110,6 +110,27 @@ curl -X POST https://your-server.com/api/v1/track \
   }'
 ```
 
+#### Test events
+
+Add `"test": true` to any `/track`, `/pageview` or `/taps` body to mark it as
+test data:
+
+```bash
+curl -X POST https://your-server.com/api/v1/track \
+  -H "Content-Type: application/json" \
+  -d '{"api_key": "proj_xxxxxxxxxxxx", "event_name": "purchase", "session_id": "dev", "test": true}'
+```
+
+Test events are stored, but reports, digests, funnels, exports, alerts and the
+MCP analytics tools ignore them. Recent activity, `/doctor`, and the MCP
+`recent_events` and `verify_integration` tools still show them, marked 🧪, so
+you can check an integration. Test taps are not stored.
+
+Events sent from `localhost`, `*.localhost`, `127.0.0.1`, `::1` or `0.0.0.0`
+(by `Origin` header or pageview URL) are marked as test automatically. If a
+project has an origin allowlist, localhost requests are still rejected unless
+the allowlist includes them.
+
 ### JavaScript SDK
 
 ```html

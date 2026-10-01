@@ -68,6 +68,11 @@
             "title": "Session Id",
             "type": "string"
           },
+          "test": {
+            "default": false,
+            "title": "Test",
+            "type": "boolean"
+          },
           "timestamp": {
             "anyOf": [
               {
@@ -275,6 +280,11 @@
             "title": "Taps",
             "type": "array"
           },
+          "test": {
+            "default": false,
+            "title": "Test",
+            "type": "boolean"
+          },
           "viewport": {
             "enum": [
               "mobile",
@@ -325,6 +335,11 @@
             "minLength": 1,
             "title": "Session Id",
             "type": "string"
+          },
+          "test": {
+            "default": false,
+            "title": "Test",
+            "type": "boolean"
           },
           "timestamp": {
             "anyOf": [
