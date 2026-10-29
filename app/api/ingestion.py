@@ -219,6 +219,9 @@ async def _run_alert_evaluation(
                     charts_cb = f"alert_pie:{aid}:{_store_keys(','.join(prop_keys))}"
                 rows.append([InlineKeyboardButton("📊 More charts", callback_data=charts_cb)])
                 rows.append(
+                    [InlineKeyboardButton("⚙️ Change frequency", callback_data=f"alert_fq:{aid}")]
+                )
+                rows.append(
                     [
                         InlineKeyboardButton("🔕 Silence", callback_data=f"alert_sil:{aid}"),
                         InlineKeyboardButton("🚫 Disable", callback_data=f"alert_dis:{aid}"),
