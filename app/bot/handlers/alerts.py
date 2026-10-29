@@ -246,6 +246,26 @@ async def alert_callback(
         alert_id_str = data[10:]
         await _disable_alert_from_notification(query, alert_id_str, owner_user_id)
 
+    elif data.startswith("alert_fq:"):
+        await _show_frequency_picker(query, data[9:], owner_user_id)
+
+    elif data.startswith("alert_fqs:"):
+        rest = data[10:]  # "{alert_id}:{code}"
+        if ":" in rest:
+            alert_id_str, code = rest.split(":", 1)
+            await _apply_frequency(query, alert_id_str, code, owner_user_id)
+
+    elif data.startswith("alert_fqc:"):
+        await _show_edit_alert(query, data[10:], owner_user_id, as_reply=True)
+
+    elif data.startswith("alert_fqb:"):
+        await query.edit_message_reply_markup(
+            reply_markup=_swap_frequency_rows(query, _frequency_button_rows(data[10:]))
+        )
+
+    elif data == "alert_fqn":
+        pass
+
     elif data.startswith("alert_pie:"):
         rest = data[10:]  # "{alert_id}" or "{alert_id}:{keys_token}"
         if ":" in rest:
@@ -480,28 +500,36 @@ async def _handle_condition_choice(
 
 
 async def _show_edit_alert(
-    query: CallbackQuery, alert_id_str: str, owner_user_id: uuid.UUID
+    query: CallbackQuery, alert_id_str: str, owner_user_id: uuid.UUID, *, as_reply: bool = False
 ) -> None:
-    """Show the edit screen for an existing alert (condition choices)."""
+    """Show the edit screen for an existing alert (condition choices).
+
+    ``as_reply`` sends the screen as a new message instead of editing the
+    current one, so an alert notification keeps its text.
+    """
+    assert isinstance(query.message, Message)
     try:
         aid = uuid.UUID(alert_id_str)
     except ValueError:
-        await query.edit_message_text("❌ Alert not found.")
+        if as_reply:
+            await query.message.reply_text("❌ Alert not found.")
+        else:
+            await query.edit_message_text("❌ Alert not found.")
         return
 
-    assert isinstance(query.message, Message)
     chat_id = query.message.chat_id
 
     factory = get_session_factory()
     async with factory() as session:
         alert = await get_alert(session, aid)
-        if alert is None:
-            await query.edit_message_text("❌ Alert not found.")
-            return
-
-        project = await get_project(session, alert.project_id, owner_user_id)
-        if project is None:
-            await query.edit_message_text("❌ Alert not found.")
+        project = (
+            None if alert is None else await get_project(session, alert.project_id, owner_user_id)
+        )
+        if alert is None or project is None:
+            if as_reply:
+                await query.message.reply_text("❌ Alert not found.")
+            else:
+                await query.edit_message_text("❌ Alert not found.")
             return
 
         pid = str(alert.project_id)
@@ -530,9 +558,11 @@ async def _show_edit_alert(
         f"• <b>Every N</b> — every Nth occurrence\n"
         f"• <b>Threshold</b> — when count exceeds N per day"
     )
-    await query.edit_message_text(
-        text, parse_mode="HTML", reply_markup=_edit_condition_keyboard(alert_id_str, pid)
-    )
+    keyboard = _edit_condition_keyboard(alert_id_str, pid)
+    if as_reply:
+        await query.message.reply_text(text, parse_mode="HTML", reply_markup=keyboard)
+    else:
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=keyboard)
 
 
 async def _handle_edit_condition_choice(
@@ -924,6 +954,144 @@ async def _disable_alert_from_notification(
 
     await query.answer("🚫 Alert disabilitato.", show_alert=False)
     await query.edit_message_reply_markup(reply_markup=None)
+
+
+# "Change frequency" picker on alert notifications. Every callback in it
+# starts with ``alert_fq`` so its rows can be found and swapped in place,
+# leaving the notification's other buttons as they are.
+_FREQ_LADDER = (2, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000)
+_FREQ_MAX = 1_000_000
+
+
+def _frequency_button_rows(alert_id_str: str) -> list[list[InlineKeyboardButton]]:
+    return [[InlineKeyboardButton("⚙️ Change frequency", callback_data=f"alert_fq:{alert_id_str}")]]
+
+
+def _swap_frequency_rows(
+    query: CallbackQuery, new_rows: list[list[InlineKeyboardButton]]
+) -> InlineKeyboardMarkup:
+    """Replace the ``alert_fq*`` rows of the message keyboard with *new_rows*."""
+    markup = query.message.reply_markup if isinstance(query.message, Message) else None
+    rows = [list(r) for r in markup.inline_keyboard] if markup else []
+    out: list[list[InlineKeyboardButton]] = []
+    inserted = False
+    for row in rows:
+        if any((b.callback_data or "").startswith("alert_fq") for b in row):
+            if not inserted:
+                out.extend(new_rows)
+                inserted = True
+            continue
+        out.append(row)
+    if not inserted:
+        out.extend(new_rows)
+    return InlineKeyboardMarkup(out)
+
+
+def _next_steps(current: int, count: int = 3) -> list[int]:
+    """The next *count* ladder values above *current* (x2/x5/x10 past the ladder)."""
+    steps = [n for n in _FREQ_LADDER if n > current][:count]
+    if len(steps) < count:
+        steps = [current * m for m in (2, 5, 10)][:count]
+    return [n for n in steps if n <= _FREQ_MAX]
+
+
+def _frequency_picker_rows(alert: Alert) -> list[list[InlineKeyboardButton]]:
+    aid = str(alert.id)
+    current = condition_description(alert.condition, alert.threshold_n)
+    current = current.replace("<b>", "").replace("</b>", "")
+    rows = [[InlineKeyboardButton(f"Now: {current}", callback_data="alert_fqn")]]
+
+    if alert.condition == AlertCondition.threshold:
+        steps = _next_steps(alert.threshold_n or 1)
+        presets = [(f">{n}/day", f"t{n}") for n in steps]
+    else:
+        base = alert.threshold_n if alert.condition == AlertCondition.every_n else 1
+        steps = _next_steps(base or 1)
+        presets = [(f"Every {n}", f"n{n}") for n in steps]
+    if presets:
+        rows.append(
+            [
+                InlineKeyboardButton(label, callback_data=f"alert_fqs:{aid}:{code}")
+                for label, code in presets
+            ]
+        )
+    if alert.condition != AlertCondition.every:
+        rows.append([InlineKeyboardButton("Every event", callback_data=f"alert_fqs:{aid}:e")])
+    rows.append(
+        [
+            InlineKeyboardButton("✏️ Custom…", callback_data=f"alert_fqc:{aid}"),
+            InlineKeyboardButton("« Back", callback_data=f"alert_fqb:{aid}"),
+        ]
+    )
+    return rows
+
+
+async def _owned_alert(
+    session: AsyncSession, alert_id_str: str, owner_user_id: uuid.UUID
+) -> Alert | None:
+    """The alert, or None when the id is bad or the caller does not own its project."""
+    try:
+        aid = uuid.UUID(alert_id_str)
+    except ValueError:
+        return None
+    alert = await get_alert(session, aid)
+    if alert is None or await get_project(session, alert.project_id, owner_user_id) is None:
+        return None
+    return alert
+
+
+async def _show_frequency_picker(
+    query: CallbackQuery, alert_id_str: str, owner_user_id: uuid.UUID
+) -> None:
+    """Swap the notification's frequency button for quick presets."""
+    assert isinstance(query.message, Message)
+    factory = get_session_factory()
+    async with factory() as session:
+        alert = await _owned_alert(session, alert_id_str, owner_user_id)
+        if alert is None:
+            await query.message.reply_text("❌ Alert not found.")
+            return
+        rows = _frequency_picker_rows(alert)
+
+    await query.edit_message_reply_markup(reply_markup=_swap_frequency_rows(query, rows))
+
+
+async def _apply_frequency(
+    query: CallbackQuery, alert_id_str: str, code: str, owner_user_id: uuid.UUID
+) -> None:
+    """Apply a preset (``e`` | ``n{N}`` | ``t{N}``) and collapse the picker."""
+    assert isinstance(query.message, Message)
+    if code == "e":
+        condition, threshold_n = AlertCondition.every, None
+    else:
+        kinds = {"n": AlertCondition.every_n, "t": AlertCondition.threshold}
+        try:
+            condition = kinds[code[:1]]
+            threshold_n = int(code[1:])
+        except (KeyError, ValueError):
+            return
+        if not 1 <= threshold_n <= _FREQ_MAX:
+            return
+
+    factory = get_session_factory()
+    async with factory() as session:
+        alert = await _owned_alert(session, alert_id_str, owner_user_id)
+        if alert is None:
+            await query.message.reply_text("❌ Alert not found.")
+            return
+        await update_alert(
+            session, alert.id, alert.project_id, condition=condition, threshold_n=threshold_n
+        )
+        await session.commit()
+        event_name = alert.event_name
+
+    await query.edit_message_reply_markup(
+        reply_markup=_swap_frequency_rows(query, _frequency_button_rows(alert_id_str))
+    )
+    await query.message.reply_text(
+        f"✅ <b>{html.escape(event_name)}</b>: {condition_description(condition, threshold_n)}",
+        parse_mode="HTML",
+    )
 
 
 async def _send_charts_from_notification(

@@ -2024,3 +2024,221 @@ async def test_delivery_record_failure_does_not_stop_other_alerts(
         )
     assert rows == []
     assert len(alerts) == 2
+
+
+# ── "Change frequency" button on notifications ────────────────────────────────
+
+
+async def _notify_and_get_keyboard(session_factory, singleton_user, *, name, condition, n=None):
+    """Fire one notification for a fresh alert; return (alert_id, keyboard)."""
+    from app.api.ingestion import _run_alert_evaluation
+    from app.services.alerts import create_alert
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        project, _ = await create_project(
+            session, name=name, admin_chat_id=ADMIN_ID, owner_user_id=singleton_user.id
+        )
+        alert = await create_alert(
+            session,
+            project_id=project.id,
+            event_name="upload",
+            condition=condition,
+            threshold_n=n,
+        )
+        await session.commit()
+        pid, aid = project.id, str(alert.id)
+
+    mock_bot = MagicMock()
+    mock_bot.send_message = AsyncMock()
+    with (
+        patch("app.api.ingestion.get_session_factory", return_value=session_factory),
+        patch("app.bot.setup.get_bot", return_value=mock_bot),
+    ):
+        # N+1 events: enough for every_n (fires at N) and threshold (fires above N).
+        for _ in range((n or 0) + 1):
+            await _run_alert_evaluation(pid, "upload", {"size_mb": 2})
+
+    mock_bot.send_message.assert_called_once()
+    return aid, mock_bot.send_message.call_args[1]["reply_markup"]
+
+
+def _tap(data: str, keyboard):
+    """A callback Update whose message carries *keyboard* (as Telegram would)."""
+    update, ctx = _make_callback(chat_id=ADMIN_ID, data=data)
+    q = update.callback_query
+    q.message.reply_markup = keyboard
+    q.message.reply_text = AsyncMock()
+    q.edit_message_reply_markup = AsyncMock()
+    return update, ctx
+
+
+def _callbacks(keyboard) -> list[str]:
+    return [b.callback_data for row in keyboard.inline_keyboard for b in row]
+
+
+async def test_frequency_picker_presets_and_apply(session_factory, singleton_user):
+    """Every 10 → picker offers 25/50/100 + every event; tapping 50 saves it."""
+    from app.bot.handlers.alerts import alert_callback
+    from app.services.alerts import get_alert
+
+    aid, kb = await _notify_and_get_keyboard(
+        session_factory,
+        singleton_user,
+        name="freq-apply.com",
+        condition=AlertCondition.every_n,
+        n=10,
+    )
+    assert f"alert_fq:{aid}" in _callbacks(kb)
+
+    update, ctx = _tap(f"alert_fq:{aid}", kb)
+    await alert_callback(update, ctx)
+    picker = update.callback_query.edit_message_reply_markup.call_args[1]["reply_markup"]
+    cbs = _callbacks(picker)
+    for code in ("n25", "n50", "n100", "e"):
+        assert f"alert_fqs:{aid}:{code}" in cbs
+    assert f"alert_fq:{aid}" not in cbs
+    # The other notification buttons survive the swap.
+    assert f"alert_sil:{aid}" in cbs and f"alert_dis:{aid}" in cbs
+    assert any(c.startswith(f"alert_pie:{aid}") for c in cbs)
+    assert all(len(c.encode()) <= 64 for c in cbs)
+    update.callback_query.edit_message_text.assert_not_called()
+
+    update, ctx = _tap(f"alert_fqs:{aid}:n50", picker)
+    await alert_callback(update, ctx)
+    collapsed = update.callback_query.edit_message_reply_markup.call_args[1]["reply_markup"]
+    assert _callbacks(collapsed) == _callbacks(kb)
+    reply = update.callback_query.message.reply_text.call_args[0][0]
+    assert "50" in reply
+
+    async with session_factory() as session:
+        alert = await get_alert(session, uuid.UUID(aid))
+        assert alert.condition == AlertCondition.every_n
+        assert alert.threshold_n == 50
+        assert alert.counter == 0
+
+
+async def test_frequency_back_restores_keyboard(session_factory, singleton_user):
+    from app.bot.handlers.alerts import alert_callback
+
+    aid, kb = await _notify_and_get_keyboard(
+        session_factory, singleton_user, name="freq-back.com", condition=AlertCondition.every
+    )
+    update, ctx = _tap(f"alert_fq:{aid}", kb)
+    await alert_callback(update, ctx)
+    picker = update.callback_query.edit_message_reply_markup.call_args[1]["reply_markup"]
+    # Already "every": no "Every event" preset, but less-frequent ones exist.
+    assert f"alert_fqs:{aid}:e" not in _callbacks(picker)
+    assert f"alert_fqs:{aid}:n5" in _callbacks(picker)
+
+    update, ctx = _tap(f"alert_fqb:{aid}", picker)
+    await alert_callback(update, ctx)
+    restored = update.callback_query.edit_message_reply_markup.call_args[1]["reply_markup"]
+    assert _callbacks(restored) == _callbacks(kb)
+
+
+async def test_frequency_threshold_presets(session_factory, singleton_user):
+    from app.bot.handlers.alerts import alert_callback
+    from app.services.alerts import get_alert, update_alert
+
+    # Threshold alerts count stored events, which the helper does not insert:
+    # fire as every_n, then switch the alert to threshold before tapping.
+    aid, kb = await _notify_and_get_keyboard(
+        session_factory,
+        singleton_user,
+        name="freq-thr.com",
+        condition=AlertCondition.every_n,
+        n=2,
+    )
+    async with session_factory() as session:
+        alert = await get_alert(session, uuid.UUID(aid))
+        await update_alert(
+            session, alert.id, alert.project_id, condition=AlertCondition.threshold, threshold_n=2
+        )
+        await session.commit()
+    update, ctx = _tap(f"alert_fq:{aid}", kb)
+    await alert_callback(update, ctx)
+    picker = update.callback_query.edit_message_reply_markup.call_args[1]["reply_markup"]
+    assert f"alert_fqs:{aid}:t5" in _callbacks(picker)
+
+    update, ctx = _tap(f"alert_fqs:{aid}:t5", picker)
+    await alert_callback(update, ctx)
+    async with session_factory() as session:
+        alert = await get_alert(session, uuid.UUID(aid))
+        assert alert.condition == AlertCondition.threshold
+        assert alert.threshold_n == 5
+
+
+async def test_frequency_custom_sends_editor_as_new_message(session_factory, singleton_user):
+    from app.bot.handlers.alerts import alert_callback
+
+    aid, kb = await _notify_and_get_keyboard(
+        session_factory, singleton_user, name="freq-custom.com", condition=AlertCondition.every
+    )
+    update, ctx = _tap(f"alert_fqc:{aid}", kb)
+    await alert_callback(update, ctx)
+    update.callback_query.edit_message_text.assert_not_called()
+    text = update.callback_query.message.reply_text.call_args[0][0]
+    assert "Edit Alert" in text
+    markup = update.callback_query.message.reply_text.call_args[1]["reply_markup"]
+    assert f"alert_ec:{aid}:every_n" in _callbacks(markup)
+
+
+async def test_frequency_rejects_bad_code(session_factory, singleton_user):
+    from app.bot.handlers.alerts import alert_callback
+    from app.services.alerts import get_alert
+
+    aid, kb = await _notify_and_get_keyboard(
+        session_factory, singleton_user, name="freq-bad.com", condition=AlertCondition.every
+    )
+    for code in ("n0", "nabc", "x5", "n99999999", ""):
+        update, ctx = _tap(f"alert_fqs:{aid}:{code}", kb)
+        await alert_callback(update, ctx)
+        update.callback_query.edit_message_reply_markup.assert_not_called()
+
+    async with session_factory() as session:
+        alert = await get_alert(session, uuid.UUID(aid))
+        assert alert.condition == AlertCondition.every
+
+
+async def test_frequency_rejects_foreign_alert(session_factory, singleton_user):
+    from sqlalchemy import text as sqltext
+
+    from app.bot.handlers.alerts import alert_callback
+    from app.models.user import User
+    from app.services.alerts import create_alert, get_alert
+    from app.services.projects import create_project
+
+    async with session_factory() as session:
+        victim = User(telegram_user_id=999_556)
+        session.add(victim)
+        await session.flush()
+        project, _ = await create_project(
+            session, name="victim-freq.com", admin_chat_id=999_556, owner_user_id=victim.id
+        )
+        alert = await create_alert(
+            session, project_id=project.id, event_name="signup", condition=AlertCondition.every
+        )
+        await session.commit()
+        aid = str(alert.id)
+        victim_id = victim.id
+
+    try:
+        for data in (f"alert_fq:{aid}", f"alert_fqs:{aid}:n50", f"alert_fqc:{aid}"):
+            update, ctx = _tap(data, None)
+            await alert_callback(update, ctx)
+            update.callback_query.edit_message_reply_markup.assert_not_called()
+            reply = update.callback_query.message.reply_text.call_args[0][0]
+            assert "not found" in reply.lower()
+
+        async with session_factory() as session:
+            reread = await get_alert(session, uuid.UUID(aid))
+            assert reread.condition == AlertCondition.every
+    finally:
+        async with session_factory() as session:
+            await session.execute(sqltext("DELETE FROM alerts WHERE id = :i"), {"i": aid})
+            await session.execute(
+                sqltext("DELETE FROM projects WHERE owner_user_id = :o"), {"o": str(victim_id)}
+            )
+            await session.execute(sqltext("DELETE FROM users WHERE id = :i"), {"i": str(victim_id)})
+            await session.commit()
