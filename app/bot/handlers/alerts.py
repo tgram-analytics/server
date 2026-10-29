@@ -259,8 +259,12 @@ async def alert_callback(
         await _show_edit_alert(query, data[10:], owner_user_id, as_reply=True)
 
     elif data.startswith("alert_fqb:"):
+        try:
+            back_id = str(uuid.UUID(data[10:]))
+        except ValueError:
+            return
         await query.edit_message_reply_markup(
-            reply_markup=_swap_frequency_rows(query, _frequency_button_rows(data[10:]))
+            reply_markup=_swap_frequency_rows(query, _frequency_button_rows(back_id))
         )
 
     elif data == "alert_fqn":
@@ -976,7 +980,7 @@ def _swap_frequency_rows(
     out: list[list[InlineKeyboardButton]] = []
     inserted = False
     for row in rows:
-        if any((b.callback_data or "").startswith("alert_fq") for b in row):
+        if any(str(b.callback_data or "").startswith("alert_fq") for b in row):
             if not inserted:
                 out.extend(new_rows)
                 inserted = True
@@ -1069,8 +1073,9 @@ async def _apply_frequency(
             condition = kinds[code[:1]]
             threshold_n = int(code[1:])
         except (KeyError, ValueError):
-            return
+            threshold_n = 0
         if not 1 <= threshold_n <= _FREQ_MAX:
+            await query.message.reply_text("❌ Invalid choice.")
             return
 
     factory = get_session_factory()
