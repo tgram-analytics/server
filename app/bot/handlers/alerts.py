@@ -988,10 +988,10 @@ def _swap_frequency_rows(
 
 
 def _next_steps(current: int, count: int = 3) -> list[int]:
-    """The next *count* ladder values above *current* (x2/x5/x10 past the ladder)."""
+    """The next *count* ladder values above *current*, doubling past the ladder."""
     steps = [n for n in _FREQ_LADDER if n > current][:count]
-    if len(steps) < count:
-        steps = [current * m for m in (2, 5, 10)][:count]
+    while len(steps) < count:
+        steps.append((steps[-1] if steps else current) * 2)
     return [n for n in steps if n <= _FREQ_MAX]
 
 
